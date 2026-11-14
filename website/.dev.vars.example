@@ -1,0 +1,6 @@
+GEMINI_API_KEY=replace-with-a-Google-AI-Studio-key
+MONGODB_URI=mongodb+srv://replace-me
+MONGODB_DATABASE=wikiwormhole
+SESSION_SECRET=replace-with-a-random-secret-of-at-least-32-characters
+# Optional. Without an AppID, Wolfram calculations are disabled and disclosed as unavailable.
+WOLFRAM_APP_ID=

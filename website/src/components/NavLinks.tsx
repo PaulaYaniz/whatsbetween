@@ -73,6 +73,8 @@ const TextLinkInternal = styled(Link)`
 export const NavLinks: React.FC<{readonly handleOpenModal: () => void}> = ({handleOpenModal}) => {
   return (
     <Wrapper>
+      {import.meta.env.DEV && <TextLinkInternal to="/scan">Scan</TextLinkInternal>}
+      {import.meta.env.DEV && <TextLinkInternal to="/research">Research</TextLinkInternal>}
       <TextLink href="#" onClick={() => handleOpenModal()}>
         About
       </TextLink>

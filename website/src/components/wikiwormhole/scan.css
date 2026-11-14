@@ -1,0 +1,269 @@
+.ww-scan-page {
+  max-width: 1240px;
+  padding: 34px 28px 64px;
+}
+.ww-scan-heading {
+  margin-bottom: 26px;
+}
+.ww-scan-heading h1 {
+  font-size: clamp(14px, 3.1vw, 42px);
+  line-height: 1.2;
+  letter-spacing: -0.03em;
+  white-space: nowrap;
+  margin: 0;
+}
+.ww-scan-heading p {
+  margin-top: 9px;
+  font-size: 16px;
+}
+.ww-scan-page .ww-scan-layout {
+  grid-template-columns: minmax(0, 1.9fr) minmax(310px, 1fr);
+  align-items: start;
+  gap: 24px;
+}
+.ww-scan-page .ww-camera-card {
+  padding: 12px;
+}
+.ww-scan-page .ww-camera-stage {
+  height: auto;
+  width: 100%;
+  background: #e5ece5;
+}
+.ww-scan-page .ww-camera-empty {
+  color: #586e64;
+  display: grid;
+  justify-items: center;
+  gap: 17px;
+  padding: 24px;
+}
+.ww-scan-page .ww-camera-empty p {
+  color: #53685f;
+  font-size: 15px;
+}
+.ww-scan-page .ww-camera-stage video,
+.ww-scan-photo {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.ww-scan-page .ww-video-wrap {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+.ww-scan-photo {
+  display: block;
+  position: absolute;
+  inset: 0;
+}
+.ww-scan-page .ww-actions {
+  padding-top: 13px;
+  gap: 10px;
+}
+.ww-scan-page .ww-actions .ww-button {
+  min-height: 44px;
+}
+.ww-camera-privacy {
+  font-size: 11px;
+  color: #596c62;
+  padding: 12px 2px 2px;
+  line-height: 1.5;
+}
+.ww-scan-page .ww-picks {
+  padding: 22px;
+}
+.ww-scan-page .ww-object-slot {
+  padding: 0 0 22px;
+  border-top: 0;
+  gap: 12px;
+}
+.ww-scan-page .ww-object-slot + .ww-object-slot {
+  border-top: 1px solid var(--line);
+  padding-top: 22px;
+}
+.ww-scan-page .ww-slot-letter {
+  border-color: #bdc9c0;
+  color: #53685f;
+  margin-top: 1px;
+}
+.ww-scan-page .ww-slot-content > label {
+  font-size: 14px;
+  margin: 2px 0 11px;
+}
+.ww-scan-page .ww-slot-content > input {
+  min-height: 44px;
+  font-size: 14px;
+  caret-color: #397564;
+}
+.ww-scan-page input::placeholder {
+  color: #65756c;
+}
+.ww-article-options {
+  border: 0;
+  padding: 0;
+  margin: 14px 0 0;
+  min-width: 0;
+}
+.ww-article-options legend {
+  font:
+    12px 'DM Sans',
+    sans-serif;
+  color: #596c62;
+  padding: 0 0 8px;
+}
+.ww-article-list {
+  max-height: 160px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #a8b9ad #f4f5ef;
+}
+.ww-article-option {
+  display: flex;
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--ink);
+}
+.ww-article-option:hover {
+  background: #f1f4ee;
+}
+.ww-article-option.is-selected {
+  background: #e3f1e9;
+}
+.ww-article-option > input {
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  flex: 0 0 16px;
+  accent-color: #397564;
+}
+.ww-article-option b {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.ww-article-option small {
+  display: block;
+  color: #53675d;
+  font-size: 11px;
+  line-height: 1.5;
+  margin-top: 3px;
+}
+.ww-article-state,
+.ww-article-error {
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 10px;
+  color: #596c62;
+}
+.ww-article-error {
+  color: #90432f;
+}
+.ww-scan-page .ww-connect-row {
+  margin-top: 0;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  display: block;
+}
+.ww-scan-page .ww-connect {
+  width: 100%;
+  min-height: 48px;
+  background: #b74d38;
+  color: #fff;
+}
+.ww-scan-page .ww-connect:hover:not(:disabled) {
+  background: #a74330;
+}
+.ww-scan-page .ww-connect:disabled {
+  background: #e5e9e1;
+  color: #627269;
+  opacity: 1;
+  cursor: not-allowed;
+}
+.ww-scan-page .ww-notice {
+  margin: 14px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.ww-detected-objects {
+  margin-bottom: 22px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.ww-detected-objects > p {
+  font-size: 12px;
+  color: #596c62;
+  margin-bottom: 10px;
+}
+.ww-scan-page .ww-chip {
+  min-height: 36px;
+}
+.ww-scan-page .ww-detection {
+  min-height: 0;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  color: #192b30;
+}
+.ww-detection > span {
+  position: absolute;
+  top: 0;
+  left: 0;
+  background: #f5c4a8;
+  padding: 4px 7px;
+  border-radius: 2px;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.ww-scan-status {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  background: #192b30;
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 5px;
+  font-size: 12px;
+}
+.ww-scan-page button:focus-visible,
+.ww-scan-page input:focus-visible {
+  outline: 2px solid #397564;
+  outline-offset: 3px;
+}
+.ww-scan-page ::selection {
+  background: #badfd0;
+  color: #192b30;
+}
+@media (max-width: 900px) {
+  .ww-scan-page {
+    padding: 28px 20px 48px;
+  }
+  .ww-scan-page .ww-scan-layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 20px;
+  }
+  .ww-scan-page .ww-picks {
+    padding: 22px;
+  }
+  .ww-article-list {
+    max-height: 152px;
+  }
+  .ww-scan-heading {
+    margin-bottom: 22px;
+  }
+}
+@media (max-width: 400px) {
+  .ww-scan-page {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .ww-scan-heading h1 {
+    font-size: 14px;
+  }
+  .ww-scan-heading p {
+    font-size: 14px;
+  }
+}
