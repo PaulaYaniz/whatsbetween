@@ -2,6 +2,15 @@
 sdow/sdow.sqlite
 sdow/searches.sqlite
 
+# Local graph datasets, backups, and database build intermediates
+/data/
+/scripts/dump/
+*.sqlite.gz
+/sdow/.env.local
+website/.dev.vars
+website/.dev.vars.local
+website/.wrangler/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -56,3 +65,14 @@ docs/_build/
 
 # PyBuilder
 target/
+
+# Local databases and secrets
+*.sqlite
+*.sqlite-*
+*.sqlite.gz
+*.sqlite.gz.part
+
+# Local tooling output
+.DS_Store
+website/.wrangler/
+website/.firebaserc

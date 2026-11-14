@@ -1,47 +1,23 @@
-# Six Degrees of Wikipedia
+# What's Between
 
-[![Six Degrees of Wikipedia Logo](/website/src/images/logo@2x.png)](https://www.sixdegreesofwikipedia.com/)
+What's Between connects two everyday objects through Wikipedia. Scan a pair, pick the two articles, and see the shortest path between them through the Wikipedia link graph, with a short AI explanation grounded in the article text.
 
-[Six Degrees of Wikipedia](https://www.sixdegreesofwikipedia.com) traverses Wikipedia page links to
-find the shortest path between any two of the millions of pages on the world's largest free online
-encyclopedia.
+- Live site: https://whatsbetween.us (once deployed)
+- Stack: React + Vite front end, Cloudflare Worker API, MongoDB Atlas for saved investigations, Gemini for recognition and explanations, optional Wolfram Alpha calculations.
+- Path search uses a local snapshot of the Wikipedia link graph (December 2023). It is labelled with that date in the app.
 
-## Documentation
+## Development
 
-- [Data Source](./docs/data-source.md) - Where data for the project comes from, including how to
-  download or generate the Six Degrees of Wikipedia database yourself.
-- [Web Server Setup](./docs/web-server-setup.md) - How to set up a web server to run a production
-  version of the Six Degrees of Wikipedia website.
-- [Local Setup](.github/CONTRIBUTING.md) - How to set up your local machine to run your own version
-  of Six Degrees of Wikipedia.
-- [Miscellaneous](./docs/miscellaneous.md) - A collection of interesting searches and edge case
-  page titles.
+```sh
+cd website
+npm install
+npm run serve        # builds and previews at http://127.0.0.1:3000 with local secrets from ../.dev.vars
+```
 
-## Blog
+Secrets live in `website/.dev.vars` (git-ignored). See `website/.dev.vars.example` for names only.
 
-- [Insights On Hitler And More From The First 500,000
-  Searches](https://www.sixdegreesofwikipedia.com/blog/search-results-analysis) - Delightful,
-  curious, and amusing insights from the first 500,000 searches on Six Degrees of Wikipedia.
+The graph service (`graph_service.py`, Python) serves the link graph from a local SQLite file that is not included in the repository. Build it from the Wikipedia link dump described in `docs/data-source.md`.
 
-## Inspiration
+## Attribution
 
-- [Six Degrees of Wikipedia](http://mu.netsoc.ie/wiki/) by Stephen Dolan.
-- The general concept of
-  [six degrees of separation](https://en.wikipedia.org/wiki/Six_degrees_of_separation) as well as
-  its offshoots like
-  [Six Degrees of Kevin Bacon](https://en.wikipedia.org/wiki/Six_Degrees_of_Kevin_Bacon).
-- [Wikiracing](https://en.wikipedia.org/wiki/Wikiracing) and its implementations in apps and website
-  such as
-  [The Wiki Game](https://itunes.apple.com/us/app/the-wiki-game-a-wikipedia-game-of-racing-and-exploring/id459318432?mt=8)
-  by Alex Clemesha and [WikiRace](http://2pages.net/wikirace.php) by 2pages.
-
-## Resources
-
-- [Wikipedia API](https://www.mediawiki.org/wiki/API:Main_page)
-- [Wikipedia database layout](https://www.mediawiki.org/wiki/Manual:Database_layout)
-- [English Wikipedia database dumps](https://dumps.wikimedia.org/enwiki)
-
-## Contributing
-
-Contributions to the project are welcome! See the [contribution page](./.github/CONTRIBUTING.md) for
-details on how to get everything set up in your local environment.
+What's Between is built on [Six Degrees of Wikipedia](https://github.com/jwngr/sdow) by Jacob Wenger, released under the MIT License. See `LICENSE`.
