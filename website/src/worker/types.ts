@@ -10,6 +10,10 @@ export interface Env {
   MODEL_RATE_LIMITER?: {limit(options: {key: string}): Promise<{success: boolean}>};
   // Local full-graph service (sdow/graph_service.py). Unset in deployed Workers.
   GRAPH_SERVICE_URL?: string;
+  // Kill switch for every Gemini-backed route; set to 'false' to pause AI features.
+  MODEL_ENABLED?: string;
+  // Shared daily cap on model-backed requests (default 200).
+  DAILY_MODEL_LIMIT?: string;
 }
 
 export interface Article {
@@ -50,6 +54,8 @@ export interface Connection {
   linkSource?: 'live' | 'graph';
   graphSnapshot?: string;
   path?: PathInfo;
+  // From the graph: how many articles each side links to, and how many of those they share.
+  linkCounts?: {source: number; target: number; shared: number};
 }
 
 export interface PathInfo {
@@ -61,6 +67,17 @@ export interface PathInfo {
   routes: Article[][];
   snapshot?: string;
   reason?: string;
+  // Summary of all shortest paths: how many exist, how many the shown stops cover, the busiest
+  // stops at each step, and only the real links between shown stops (as [fromId, toId]).
+  totalPaths?: number;
+  shownPaths?: number;
+  steps?: PathStop[][];
+  links?: [number, number][];
+}
+
+export interface PathStop extends Article {
+  // Number of shortest paths that pass through this stop.
+  through: number;
 }
 
 export interface SignedResult {

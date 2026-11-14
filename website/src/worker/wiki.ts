@@ -1,4 +1,4 @@
-import type {Article, Connection, Env, Evidence, PathInfo} from './types';
+import type {Article, Connection, Env, Evidence, PathInfo, PathStop} from './types';
 import {RequestBudget, WikiError, WikipediaTransport} from './wikiTransport';
 
 interface WikiArticleRecord {
@@ -277,12 +277,17 @@ function evidenceFor(
 
 // Shortest path between two articles from the local graph service. Never throws: the result
 // always says whether a path was searched, so the UI can show it or explain why not.
-async function graphPath(baseUrl: string, sourceId: number, targetId: number): Promise<PathInfo> {
+export async function graphPath(
+  baseUrl: string,
+  sourceId: number,
+  targetId: number,
+  perStep = 6
+): Promise<PathInfo> {
   try {
     const url = new URL('/api/graph/path', baseUrl);
     url.searchParams.set('source', String(sourceId));
     url.searchParams.set('target', String(targetId));
-    url.searchParams.set('limit', '3');
+    url.searchParams.set('perStep', String(perStep));
     const response = await fetch(url, {signal: AbortSignal.timeout(8000)});
     const body = (await response.json()) as any;
     if (!response.ok) {
@@ -298,12 +303,22 @@ async function graphPath(baseUrl: string, sourceId: number, targetId: number): P
       title: String(page.title),
       url: `https://en.wikipedia.org/wiki/${encodeURIComponent(String(page.title).replaceAll(' ', '_'))}`,
     });
+    const toStop = (page: any): PathStop => ({
+      ...toArticle(page),
+      through: Number(page.through) || 0,
+    });
     const routes: Article[][] = (body.paths || []).map((route: any[]) => route.map(toArticle));
     return {
       source: 'graph',
       found: Boolean(body.found),
       hops: typeof body.hops === 'number' ? body.hops : undefined,
       routes,
+      totalPaths: Number(body.totalPaths) || 0,
+      shownPaths: Number(body.shownPaths) || 0,
+      steps: (body.steps || []).map((column: any[]) => column.map(toStop)),
+      links: (body.links || [])
+        .filter((link: unknown) => Array.isArray(link) && link.length === 2)
+        .map((link: number[]) => [Number(link[0]), Number(link[1])] as [number, number]),
       snapshot: typeof body.snapshot === 'string' ? body.snapshot : undefined,
       ...(body.found ? {} : {reason: 'no_path_within_limit'}),
     };
@@ -321,8 +336,15 @@ async function graphSharedTopics(baseUrl: string, sourceId: number, targetId: nu
     url.searchParams.set('target', String(targetId));
     const response = await fetch(url, {signal: AbortSignal.timeout(3000)});
     if (!response.ok) return null;
-    const body = (await response.json()) as {snapshot?: unknown; topics?: unknown};
+    const body = (await response.json()) as {
+      snapshot?: unknown;
+      topics?: unknown;
+      total?: unknown;
+      sourceLinks?: unknown;
+      targetLinks?: unknown;
+    };
     if (typeof body.snapshot !== 'string' || !Array.isArray(body.topics)) return null;
+    const count = (value: unknown) => (typeof value === 'number' && value >= 0 ? value : 0);
     const topics: Article[] = body.topics
       .filter((item: any) => Number.isSafeInteger(item?.id) && typeof item?.title === 'string')
       .map((item: {id: number; title: string}) => ({
@@ -330,7 +352,15 @@ async function graphSharedTopics(baseUrl: string, sourceId: number, targetId: nu
         title: item.title,
         url: `https://en.wikipedia.org/wiki/${encodeURIComponent(item.title.replaceAll(' ', '_'))}`,
       }));
-    return {snapshot: body.snapshot, topics};
+    return {
+      snapshot: body.snapshot,
+      topics,
+      linkCounts: {
+        source: count(body.sourceLinks),
+        target: count(body.targetLinks),
+        shared: count(body.total),
+      },
+    };
   } catch {
     return null;
   }
@@ -414,11 +444,21 @@ export async function connectArticles(
       ...(item.description ? {description: item.description} : {}),
       ...(item.disambiguation ? {disambiguation: true} : {}),
     }));
+  const path = await pathFor(graphUrl, source.id, target.id);
+  // One batched Wikipedia request (max 14 pages) supplies descriptions and pictures for both
+  // objects plus either the shared topics or, when there are none, the stops along the routes.
+  // Descriptions for the shown stops (busiest first), within the 14-page batch.
+  const pathStops = [
+    ...new Set([
+      ...(path.steps ?? []).flat().map((node) => node.id),
+      ...path.routes.flatMap((route) => route.slice(1, -1).map((node) => node.id)),
+    ]),
+  ];
   let details: WikiArticleRecord[] = [];
   if (budget.used < budget.limit) {
     try {
       details = await articleDetails(
-        [source.id, target.id, ...selected.map((item) => item.id)],
+        [source.id, target.id, ...(selected.length ? selected.map((item) => item.id) : pathStops)],
         budget
       );
     } catch (error) {
@@ -430,6 +470,23 @@ export async function connectArticles(
   );
   // The snapshot is from 2023: drop topics whose pages no longer resolve on Wikipedia.
   if (graph && details.length) selected = selected.filter((topic) => byId.has(topic.id));
+  const enrich = <T extends {id: number}>(item: T): T => {
+    const live = byId.get(item.id)?.article;
+    if (!live) return item;
+    return {
+      ...item,
+      ...(live.description ? {description: live.description} : {}),
+      ...(live.thumbnailUrl ? {thumbnailUrl: live.thumbnailUrl} : {}),
+    };
+  };
+  const shownSource = enrich(source);
+  const shownTarget = enrich(target);
+  selected = selected.map(enrich);
+  const shownPath: PathInfo = {
+    ...path,
+    routes: path.routes.map((route) => route.map(enrich)),
+    ...(path.steps ? {steps: path.steps.map((column) => column.map(enrich))} : {}),
+  };
   const evidenceByTopic: Record<string, Evidence[]> = {};
   for (const topic of selected) {
     const sourceRecord = byId.get(source.id);
@@ -448,8 +505,8 @@ export async function connectArticles(
   }
   return {
     id: crypto.randomUUID(),
-    source,
-    target,
+    source: shownSource,
+    target: shownTarget,
     sharedTopics: selected,
     evidenceByTopic,
     linkCompleteness,
@@ -463,9 +520,9 @@ export async function connectArticles(
     retrievedAt,
     requestCount: budget.used,
     ...(graph
-      ? {linkSource: 'graph' as const, graphSnapshot: graph.snapshot}
+      ? {linkSource: 'graph' as const, graphSnapshot: graph.snapshot, linkCounts: graph.linkCounts}
       : {linkSource: 'live' as const}),
-    path: await pathFor(graphUrl, source.id, target.id),
+    path: shownPath,
   };
 }
 

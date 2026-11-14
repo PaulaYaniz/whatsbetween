@@ -1,5 +1,6 @@
 import {z} from 'zod';
 
+import {MODEL_UNAVAILABLE_MESSAGES, reserveModelCall} from './budget';
 import {createDiscoveryCard, recognizeFrame} from './gemini';
 import {investigate} from './research';
 import {getSession, issueSession, readResult, signResult} from './session';
@@ -11,7 +12,7 @@ import {
   type Finding,
 } from './store';
 import type {Env} from './types';
-import {connectArticles, RequestBudget, searchArticles, WikiError} from './wiki';
+import {connectArticles, graphPath, RequestBudget, searchArticles, WikiError} from './wiki';
 
 const corsHeaders = {'Access-Control-Allow-Origin': '', Vary: 'Origin'};
 
@@ -204,17 +205,24 @@ async function api(request: Request, env: Env): Promise<Response> {
     ) {
       return json({error: 'Choose two valid article IDs.', code: 'invalid_article'}, 400);
     }
-    try {
-      const upstream = new URL('/api/graph/path', env.GRAPH_SERVICE_URL);
-      upstream.searchParams.set('source', String(sourceId));
-      upstream.searchParams.set('target', String(targetId));
-      const response = await fetch(upstream, {signal: AbortSignal.timeout(10_000)});
-      return json(await response.json(), response.status);
-    } catch {
-      return json({error: 'Graph service unavailable.', code: 'graph_unavailable'}, 503);
-    }
+    // perStep lets the page show more (or fewer) of the busiest stops without a new connection.
+    const perStep = Math.min(40, Math.max(1, numberParam(url.searchParams.get('perStep')) || 6));
+    const path = await graphPath(env.GRAPH_SERVICE_URL, sourceId, targetId, perStep);
+    return json({path}, path.source === 'unavailable' ? 503 : 200);
   }
   if (url.pathname === '/api/discover' && request.method === 'POST') {
+    const reservation = await reserveModelCall(env);
+    if (!reservation.allowed)
+      return json(
+        {
+          error: {
+            code: 'model_unavailable',
+            reason: reservation.reason,
+            message: MODEL_UNAVAILABLE_MESSAGES[reservation.reason],
+          },
+        },
+        503
+      );
     const body = z
       .object({resultToken: z.string().min(1).max(64_000), candidateId: z.string().regex(/^\d+$/)})
       .parse(await readBody(request, 70_000));
@@ -240,6 +248,18 @@ async function api(request: Request, env: Env): Promise<Response> {
     return json(discovery);
   }
   if (url.pathname === '/api/recognize' && request.method === 'POST') {
+    const reservation = await reserveModelCall(env);
+    if (!reservation.allowed)
+      return json(
+        {
+          error: {
+            code: 'model_unavailable',
+            reason: reservation.reason,
+            message: MODEL_UNAVAILABLE_MESSAGES[reservation.reason],
+          },
+        },
+        503
+      );
     const body = z
       .object({imageBase64: z.string().min(100).max(2_100_000), mimeType: z.literal('image/jpeg')})
       .parse(await readBody(request, 2_200_000));
@@ -362,6 +382,18 @@ async function api(request: Request, env: Env): Promise<Response> {
     return json({investigation: saved}, 201);
   }
   if (url.pathname === '/api/research' && request.method === 'POST') {
+    const reservation = await reserveModelCall(env);
+    if (!reservation.allowed)
+      return json(
+        {
+          error: {
+            code: 'model_unavailable',
+            reason: reservation.reason,
+            message: MODEL_UNAVAILABLE_MESSAGES[reservation.reason],
+          },
+        },
+        503
+      );
     const body = z
       .object({
         resultToken: z.string().min(1).max(64_000),
