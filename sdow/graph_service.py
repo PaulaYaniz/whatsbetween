@@ -31,6 +31,8 @@ PREFERRED_INCOMING = 500
 MAX_HOPS = 8
 DEFAULT_MAX_HOPS = 6
 MAX_PATHS = 5
+DEFAULT_PER_STEP = 6
+MAX_PER_STEP = 40
 MAX_TOPICS = 12
 MAX_NODES_VISITED = 2_000_000
 CHUNK = 500
@@ -43,6 +45,16 @@ class GraphUnavailable(Exception):
 
 class SearchLimitReached(Exception):
   pass
+
+
+def display_title(raw):
+  """SDOW stores titles with underscores for spaces and backslash-escaped quotes."""
+  return raw.replace('_', ' ').replace("\\'", "'").replace('\\"', '"')
+
+
+def stored_title(text):
+  """The form a title takes in the SDOW pages table."""
+  return text.strip().replace(' ', '_').replace("'", "\\'").replace('"', '\\"')
 
 
 class Graph(object):
@@ -64,7 +76,7 @@ class Graph(object):
       placeholders = ','.join('?' * len(chunk))
       for page_id, title, is_redirect in conn.execute(
           f'SELECT id, title, is_redirect FROM pages WHERE id IN ({placeholders})', chunk):
-        found[page_id] = {'id': page_id, 'title': title.replace('_', ' '), 'isRedirect': bool(is_redirect)}
+        found[page_id] = {'id': page_id, 'title': display_title(title), 'isRedirect': bool(is_redirect)}
     return found
 
   def links(self, conn, ids, column):
@@ -93,7 +105,7 @@ class Graph(object):
   def resolve_title(self, conn, title):
     row = conn.execute(
         'SELECT id FROM pages WHERE title = ? COLLATE NOCASE ORDER BY is_redirect ASC LIMIT 1',
-        (title.replace('_', ' ').strip(),)).fetchone()
+        (stored_title(title),)).fetchone()
     if row is None:
       return None
     return self.resolve_redirect(conn, row[0])
@@ -135,11 +147,10 @@ class Graph(object):
     topics.sort(key=lambda topic: (closeness(topic), topic['title']))
     return topics
 
-  def shortest_paths(self, conn, source_id, target_id, max_hops, limit):
-    """Bidirectional level-by-level breadth-first search returning up to `limit` shortest paths."""
-    if source_id == target_id:
-      return 0, [[source_id]]
-
+  def _search(self, conn, source_id, target_id, max_hops):
+    """Bidirectional level-by-level breadth-first search. Returns the forward parent map, the
+    backward child map and the set of nodes where the two searches met, or None if no route exists
+    within max_hops."""
     forward_parents = {source_id: set()}
     backward_children = {target_id: set()}
     forward_frontier = {source_id}
@@ -175,32 +186,179 @@ class Graph(object):
         raise SearchLimitReached('Search visited too many pages; try a closer pair.')
 
     if not meeting:
+      return None
+    return forward_parents, backward_children, meeting
+
+  def shortest_path_graph(self, conn, source_id, target_id, max_hops):
+    """Every node and link on any shortest path, with each node's step number and the number of
+    shortest paths passing through it. Returns None when there is no route within max_hops."""
+    if source_id == target_id:
+      return {'hops': 0, 'step': {source_id: 0}, 'children': {}, 'parents': {}, 'through': {source_id: 1},
+              'total': 1}
+    found = self._search(conn, source_id, target_id, max_hops)
+    if found is None:
+      return None
+    forward_parents, backward_children, meeting = found
+    children, parents = {}, {}
+
+    def link(parent, child):
+      children.setdefault(parent, set()).add(child)
+      parents.setdefault(child, set()).add(parent)
+
+    # Walk back from the meeting nodes to the start, and forward from them to the end.
+    stack, seen = list(meeting), set(meeting)
+    while stack:
+      node = stack.pop()
+      for parent in forward_parents.get(node, ()):
+        link(parent, node)
+        if parent not in seen:
+          seen.add(parent)
+          stack.append(parent)
+    stack, seen = list(meeting), set(meeting)
+    while stack:
+      node = stack.pop()
+      for child in backward_children.get(node, ()):
+        link(node, child)
+        if child not in seen:
+          seen.add(child)
+          stack.append(child)
+
+    # Step numbers: distance from the start along the shortest-path graph.
+    step = {source_id: 0}
+    frontier = [source_id]
+    while frontier:
+      following = []
+      for node in frontier:
+        for child in children.get(node, ()):
+          if child not in step:
+            step[child] = step[node] + 1
+            following.append(child)
+      frontier = following
+    hops = step[target_id]
+
+    # Path counts without listing paths: from the start to each node, and from each node to the end.
+    order = sorted(step, key=step.get)
+    to_node = {source_id: 1}
+    for node in order[1:]:
+      to_node[node] = sum(to_node[parent] for parent in parents.get(node, ()))
+    from_node = {target_id: 1}
+    for node in reversed(order[:-1]):
+      from_node[node] = sum(from_node[child] for child in children.get(node, ()))
+    through = {node: to_node[node] * from_node.get(node, 0) for node in step}
+    return {'hops': hops, 'step': step, 'children': children, 'parents': parents, 'through': through,
+            'total': to_node[target_id]}
+
+  def path_summary(self, conn, source_id, target_id, max_hops, per_step, hub_limit=HUB_INCOMING_LIMIT):
+    """A readable slice of all shortest paths: the busiest stops at each step (most shortest paths
+    through them), only real links between them, and counts of total and shown paths."""
+    graph = self.shortest_path_graph(conn, source_id, target_id, max_hops)
+    if graph is None:
+      return None
+    hops, step, children, parents, through = (
+        graph['hops'], graph['step'], graph['children'], graph['parents'], graph['through'])
+    middle = [node for node in step if 0 < step[node] < hops]
+    incoming = self.incoming_counts(conn, middle)
+    titles = self.pages(conn, list(step))
+
+    def rank(node):
+      return (-through[node], titles.get(node, {}).get('title', ''))
+
+    def is_hub(node):
+      return incoming.get(node, 0) > hub_limit
+
+    # Pick the busiest stops step by step. After the first step, prefer stops linked to the stops
+    # already chosen, so the view stays connected. Hub pages only when a step has nothing else.
+    chosen = {}
+    for number in range(1, hops):
+      previous = chosen.get(number - 1, {source_id})
+      at_step = sorted((node for node in middle if step[node] == number),
+                       key=lambda node: (not parents.get(node, set()) & previous, rank(node)))
+      plain = [node for node in at_step if not is_hub(node)]
+      chosen[number] = set((plain or at_step)[:per_step])
+
+    def best(nodes):
+      nodes = sorted(nodes, key=lambda node: (is_hub(node), rank(node)))
+      return nodes[0] if nodes else None
+
+    # Repair gaps so every shown stop links to a shown stop on each side.
+    for _ in range(hops + 1):
+      changed = False
+      for number in range(1, hops - 1):
+        for node in list(chosen[number]):
+          if not children.get(node, set()) & chosen[number + 1]:
+            chosen[number + 1].add(best(children.get(node, ())))
+            changed = True
+      for number in range(hops - 1, 1, -1):
+        for node in list(chosen[number]):
+          if not parents.get(node, set()) & chosen[number - 1]:
+            chosen[number - 1].add(best(parents.get(node, ())))
+            changed = True
+      if not changed:
+        break
+
+    shown = {source_id, target_id}.union(*chosen.values()) if chosen else {source_id, target_id}
+    links = sorted((parent, child) for parent in shown for child in children.get(parent, ())
+                   if child in shown and step[child] == step[parent] + 1)
+
+    # Order each column to reduce crossings: by the average position of its shown parents.
+    columns, position = [], {source_id: 0.0}
+    for number in range(1, hops):
+      nodes = sorted(chosen[number], key=rank)
+      if number > 1:
+        def centre(node):
+          spots = [position[parent] for parent in parents.get(node, ()) if parent in position]
+          return sum(spots) / len(spots) if spots else 0.0
+        nodes.sort(key=lambda node: (centre(node), rank(node)))
+      for index, node in enumerate(nodes):
+        position[node] = float(index)
+      columns.append(nodes)
+
+    # Complete paths that stay inside what is shown.
+    shown_count = {source_id: 1}
+    for node in sorted(shown, key=step.get)[1:]:
+      shown_count[node] = sum(shown_count.get(parent, 0) for parent in parents.get(node, ()) if parent in shown)
+
+    # A few full example routes (busiest first) for saving and "Explain this route".
+    def busiest_route_through(node):
+      head, current = [node], node
+      while current != source_id:
+        current = max(parents[current], key=lambda parent: (through[parent], -parent))
+        head.insert(0, current)
+      current = node
+      while current != target_id:
+        current = max(children[current], key=lambda child: (through[child], -child))
+        head.append(current)
+      return head
+
+    routes = []
+    for node in (columns[0] if columns else []):
+      route = busiest_route_through(node)
+      if route not in routes:
+        routes.append(route)
+      if len(routes) == 5:
+        break
+    if hops <= 1:
+      routes = [[source_id, target_id]] if hops == 1 else [[source_id]]
+
+    def page(node):
+      details = titles.get(node, {'id': node, 'title': str(node), 'isRedirect': False})
+      return {**details, 'through': through.get(node, 0)}
+
+    return {
+      'hops': hops,
+      'totalPaths': graph['total'],
+      'shownPaths': shown_count.get(target_id, 0),
+      'steps': [[page(node) for node in column] for column in columns],
+      'links': [list(item) for item in links],
+      'routes': [[page(node) for node in route] for route in routes],
+    }
+
+  def shortest_paths(self, conn, source_id, target_id, max_hops, limit):
+    """Up to `limit` example shortest paths (busiest first)."""
+    summary = self.path_summary(conn, source_id, target_id, max_hops, per_step=limit)
+    if summary is None:
       return None, []
-
-    def forward_paths(node):
-      if node == source_id:
-        yield [source_id]
-        return
-      for parent in forward_parents[node]:
-        for path in forward_paths(parent):
-          yield path + [node]
-
-    def backward_paths(node):
-      if node == target_id:
-        yield [target_id]
-        return
-      for child in backward_children[node]:
-        for path in backward_paths(child):
-          yield [node] + path
-
-    paths = []
-    for middle in sorted(meeting):
-      for head in itertools.islice(forward_paths(middle), limit):
-        for tail in itertools.islice(backward_paths(middle), limit):
-          paths.append(head + tail[1:])
-          if len(paths) == limit:
-            return len(paths[0]) - 1, paths
-    return len(paths[0]) - 1, paths
+    return summary['hops'], [[item['id'] for item in route] for route in summary['routes'][:limit]]
 
 
 def _int_arg(name):
@@ -268,8 +426,9 @@ def create_app(database_path, status_path=None, allow_unvalidated=False, hub_lim
   @app.get('/api/graph/search')
   def search():
     ensure_validated()
-    query = request.args.get('q', '').strip().replace('_', ' ')
-    if len(query) < 2 or len(query) > 100:
+    typed = request.args.get('q', '').strip()
+    query = stored_title(typed)
+    if len(typed) < 2 or len(typed) > 100:
       raise ValueError('q must be 2 to 100 characters.')
     # Prefix search on the indexed, case-insensitive title column.
     conn = graph.connect()
@@ -283,10 +442,10 @@ def create_app(database_path, status_path=None, allow_unvalidated=False, hub_lim
     finally:
       conn.close()
     matches = sorted(
-        ({'id': page_id, 'title': title.replace('_', ' '), 'incomingLinks': counts.get(page_id, 0)}
+        ({'id': page_id, 'title': display_title(title), 'incomingLinks': counts.get(page_id, 0)}
          for page_id, title in rows),
-        key=lambda item: (item['title'].lower() != query.lower(), -item['incomingLinks']))[:10]
-    return jsonify({'query': query, 'snapshot': snapshot, 'results': matches})
+        key=lambda item: (item['title'].lower() != typed.lower(), -item['incomingLinks']))[:10]
+    return jsonify({'query': typed, 'snapshot': snapshot, 'results': matches})
 
   @app.get('/api/graph/pages')
   def pages_by_id():
@@ -310,10 +469,15 @@ def create_app(database_path, status_path=None, allow_unvalidated=False, hub_lim
     conn = graph.connect()
     try:
       topics = graph.shared_topics(conn, source_id, target_id, max_incoming)
+      # How many articles each side links to, so the UI can show how few of them meet.
+      outgoing = dict(conn.execute(
+          'SELECT id, outgoing_links_count FROM links WHERE id IN (?, ?)',
+          (source_id, target_id)).fetchall())
     finally:
       conn.close()
     return jsonify({
       'sourceId': source_id, 'targetId': target_id, 'snapshot': snapshot,
+      'sourceLinks': outgoing.get(source_id, 0), 'targetLinks': outgoing.get(target_id, 0),
       'total': len(topics), 'topics': topics[:MAX_TOPICS],
     })
 
@@ -322,22 +486,19 @@ def create_app(database_path, status_path=None, allow_unvalidated=False, hub_lim
     ensure_validated()
     source_id, target_id = _int_arg('source'), _int_arg('target')
     max_hops = min(MAX_HOPS, max(1, int(request.args.get('maxHops', DEFAULT_MAX_HOPS))))
-    limit = min(MAX_PATHS, max(1, int(request.args.get('limit', 3))))
+    per_step = min(MAX_PER_STEP, max(1, int(request.args.get('perStep', DEFAULT_PER_STEP))))
     conn = graph.connect()
     try:
-      hops, paths = graph.shortest_paths(conn, source_id, target_id, max_hops, limit)
-      if not paths:
-        return jsonify({'sourceId': source_id, 'targetId': target_id, 'snapshot': snapshot,
-                        'found': False, 'maxHops': max_hops, 'paths': []})
-      ids = {page_id for route in paths for page_id in route}
-      details = graph.pages(conn, ids)
+      summary = graph.path_summary(conn, source_id, target_id, max_hops, per_step, hub_limit)
     finally:
       conn.close()
-    return jsonify({
-      'sourceId': source_id, 'targetId': target_id, 'snapshot': snapshot, 'found': True,
-      'hops': hops, 'maxHops': max_hops,
-      'paths': [[details[page_id] for page_id in route] for route in paths],
-    })
+    base = {'sourceId': source_id, 'targetId': target_id, 'snapshot': snapshot, 'maxHops': max_hops}
+    if summary is None:
+      return jsonify({**base, 'found': False, 'paths': [], 'steps': [], 'links': [], 'totalPaths': 0,
+                      'shownPaths': 0})
+    return jsonify({**base, 'found': True, 'hops': summary['hops'], 'totalPaths': summary['totalPaths'],
+                    'shownPaths': summary['shownPaths'], 'steps': summary['steps'],
+                    'links': summary['links'], 'paths': summary['routes']})
 
   return app
 

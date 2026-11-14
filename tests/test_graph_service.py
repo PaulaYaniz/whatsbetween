@@ -11,6 +11,17 @@ PAGES = {
     1: ('Coffee', 0), 2: ('Tea', 0), 3: ('Caffeine', 0), 4: ('Beverage Industry Trade', 0),
     5: ('Science Fiction', 0), 6: ('Teh', 1), 7: ('Plant', 0), 8: ('Leaf', 0), 9: ('Drink', 0),
     30: ('Island', 0), 40: ('ISBN', 0),
+    # SDOW stores quotes escaped with a backslash.
+    50: ("April Fools\\' Day", 0),
+    # Branching routes: 100 to 110 in three steps, four shortest paths.
+    100: ('Start', 0), 101: ('Branch A', 0), 102: ('Branch B', 0), 103: ('Branch C', 0),
+    104: ('Middle D', 0), 105: ('Middle E', 0), 110: ('Finish', 0),
+    # Gap repair: the busiest stops at step 1 and step 2 are not linked to each other.
+    200: ('Gap start', 0), 201: ('Alpha', 0), 202: ('Way one', 0), 203: ('Way two', 0),
+    204: ('Pass', 0), 205: ('Yard', 0), 210: ('Gap end', 0),
+    # Hub skipping: 301 is busier than 302 but is a hub (linked from many pages).
+    300: ('Hub start', 0), 301: ('Busy hub', 0), 302: ('Quiet stop', 0), 303: ('Hub child one', 0),
+    304: ('Hub child two', 0), 305: ('Quiet child', 0), 310: ('Hub end', 0),
     20: ('Chain 20', 0), 21: ('Chain 21', 0), 22: ('Chain 22', 0), 23: ('Chain 23', 0),
     24: ('Chain 24', 0), 25: ('Chain 25', 0), 26: ('Chain 26', 0),
 }
@@ -21,6 +32,10 @@ EDGES = [
     (20, 21), (21, 22), (22, 23), (23, 24), (24, 25), (25, 26),
     # ISBN-style hub: linked from both topics and from many other articles.
     (1, 40), (2, 40), (20, 40), (21, 40), (22, 40), (23, 40),
+    (100, 101), (100, 102), (100, 103), (101, 104), (101, 105), (102, 104), (103, 105), (104, 110), (105, 110),
+    (200, 201), (200, 202), (200, 203), (201, 204), (202, 205), (203, 205), (204, 210), (205, 210),
+    (300, 301), (300, 302), (301, 303), (301, 304), (302, 305), (303, 310), (304, 310), (305, 310),
+    (20, 301), (21, 301), (22, 301), (23, 301), (24, 301),
 ]
 REDIRECTS = {6: 3}
 
@@ -34,8 +49,9 @@ def build_database(path):
     CREATE TABLE links (id INTEGER PRIMARY KEY, outgoing_links_count INTEGER NOT NULL,
       incoming_links_count INTEGER NOT NULL, outgoing_links TEXT NOT NULL, incoming_links TEXT NOT NULL);
   """)
+  # Real SDOW titles use underscores instead of spaces; the fixture does the same.
   connection.executemany('INSERT INTO pages VALUES (?, ?, ?)',
-                         [(pid, title, redirect) for pid, (title, redirect) in PAGES.items()])
+                         [(pid, title.replace(' ', '_'), redirect) for pid, (title, redirect) in PAGES.items()])
   connection.executemany('INSERT INTO redirects VALUES (?, ?)', REDIRECTS.items())
   outgoing = {pid: [] for pid in PAGES}
   incoming = {pid: [] for pid in PAGES}
@@ -77,6 +93,12 @@ class GraphServiceTests(unittest.TestCase):
     self.assertEqual([topic['title'] for topic in body['topics']],
                      ['Beverage Industry Trade', 'Caffeine'])
     self.assertEqual(body['total'], 2)
+
+  def test_shared_topics_report_each_side_link_count(self):
+    body = self.app.get('/api/graph/shared-topics?source=1&target=2').get_json()
+    # Fixture: Coffee (1) links to 3, 4, 5, 7, 9, 40; Tea (2) links to 3, 4, 5, 8, 40.
+    self.assertEqual(body['sourceLinks'], 6)
+    self.assertEqual(body['targetLinks'], 5)
 
   def test_hub_limit_is_configurable(self):
     body = self.full_limit_app.get('/api/graph/shared-topics?source=1&target=2').get_json()
@@ -141,6 +163,51 @@ class GraphServiceTests(unittest.TestCase):
     body = self.testing_app.get('/api/graph/pages?ids=1,2,999').get_json()
     self.assertEqual([page['title'] for page in body['pages']], ['Coffee', 'Tea'])
     self.assertEqual(self.testing_app.get('/api/graph/pages?ids=abc').status_code, 400)
+
+  def path(self, query, client=None):
+    return (client or self.app).get(f'/api/graph/path?{query}').get_json()
+
+  def test_path_summary_counts_every_shortest_path(self):
+    body = self.path('source=100&target=110')
+    self.assertEqual(body['hops'], 3)
+    self.assertEqual(body['totalPaths'], 4)
+    self.assertEqual(body['shownPaths'], 4)
+    through = {page['title']: page['through'] for column in body['steps'] for page in column}
+    self.assertEqual(through, {'Branch A': 2, 'Branch B': 1, 'Branch C': 1, 'Middle D': 2, 'Middle E': 2})
+
+  def test_path_summary_shows_busiest_stops_and_only_real_links(self):
+    body = self.path('source=100&target=110&perStep=1')
+    self.assertEqual([[page['title'] for page in column] for column in body['steps']], [['Branch A'], ['Middle D']])
+    self.assertEqual(body['links'], [[100, 101], [101, 104], [104, 110]])
+    self.assertEqual(body['totalPaths'], 4)
+    self.assertEqual(body['shownPaths'], 1)
+
+  def test_path_summary_repairs_gaps_so_no_stop_dangles(self):
+    body = self.path('source=200&target=210&perStep=2')
+    shown = {page['id'] for column in body['steps'] for page in column}
+    links = {tuple(link) for link in body['links']}
+    for stop in shown:
+      self.assertTrue(any(link[1] == stop for link in links), f'{stop} has no incoming shown link')
+      self.assertTrue(any(link[0] == stop for link in links), f'{stop} has no outgoing shown link')
+    self.assertIn(205, shown)  # Yard: the busiest stop at step 2
+    self.assertEqual(body['shownPaths'], 2)
+
+  def test_path_summary_prefers_quiet_stops_over_hubs(self):
+    body = self.path('source=300&target=310&perStep=1')
+    self.assertEqual(body['steps'][0][0]['title'], 'Quiet stop')
+    self.assertEqual(body['totalPaths'], 3)
+
+  def test_search_handles_multi_word_titles(self):
+    body = self.app.get('/api/graph/search?q=Beverage%20Ind').get_json()
+    self.assertEqual([result['title'] for result in body['results']], ['Beverage Industry Trade'])
+
+  def test_titles_with_quotes_are_unescaped_and_searchable(self):
+    page = self.app.get('/api/graph/pages?ids=50').get_json()['pages'][0]
+    self.assertEqual(page['title'], "April Fools' Day")
+    results = self.app.get("/api/graph/search?q=April%20Fools'").get_json()['results']
+    self.assertEqual([item['title'] for item in results], ["April Fools' Day"])
+    lookup = self.app.get("/api/graph/page?title=April%20Fools'%20Day").get_json()
+    self.assertEqual(lookup['page']['id'], 50)
 
   def test_database_is_opened_read_only(self):
     conn = sqlite3.connect(self.db.resolve().as_uri() + '?mode=ro', uri=True)
