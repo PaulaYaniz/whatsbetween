@@ -1,0 +1,353 @@
+/* The loom (ConnectionLoom.tsx). Color carries meaning: indigo = the left object, weld yellow =
+   the right object, verdigris green = where their threads meet. */
+
+.ww-loom {
+  position: relative;
+  width: 100%;
+}
+
+.ww-loom-scroll {
+  /* Room for the portrait rings, which a scrolling box would otherwise clip. */
+  padding: 10px;
+  margin: -10px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+
+.ww-loom-scroll:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 4px;
+}
+
+.ww-loom-frame {
+  position: relative;
+  width: 100%;
+}
+
+.ww-loom-swipe {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.ww-loom-threads {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.ww-thread {
+  fill: none;
+  stroke-linecap: round;
+}
+
+.ww-thread {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: ww-draw 1100ms cubic-bezier(0.25, 0.7, 0.2, 1) forwards;
+  transition: opacity 0.2s ease;
+}
+
+.ww-thread--a {
+  stroke: var(--indigo);
+}
+
+.ww-thread--b {
+  stroke: var(--weld);
+}
+
+.ww-thread--between {
+  stroke: var(--verdigris);
+}
+
+.ww-thread--direct {
+  /* The direct link is the left object's own link to the right one, so it is drawn in indigo. */
+  stroke: var(--indigo);
+}
+
+.ww-thread.is-dim {
+  /* Every line is a real link, so unselected ones stay readable. */
+  opacity: 0.35;
+}
+
+.ww-thread.is-lit {
+  opacity: 1;
+}
+
+@keyframes ww-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* Objects at either end. The caption hangs below the circle so the circle itself sits exactly on
+   the thread anchor. */
+.ww-loom-anchor {
+  position: absolute;
+  z-index: 2;
+  transform: translateY(-50%);
+}
+
+.ww-loom-anchor--a {
+  left: 0;
+}
+
+.ww-loom-anchor--b {
+  right: 0;
+}
+
+.ww-loom-object {
+  position: relative;
+  margin: 0;
+}
+
+.ww-loom-object--a {
+  color: var(--indigo);
+}
+
+.ww-loom-object--b {
+  color: var(--weld);
+}
+
+.ww-loom-portrait {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--card);
+  box-shadow:
+    0 0 0 4px var(--ground),
+    0 0 0 7px currentColor;
+}
+
+.ww-loom-portrait img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Wikipedia images are often diagrams or wide photos: fit them inside the circle instead of
+   cropping. Camera crops are already square and centred on the object, so they fill it. */
+.ww-loom-portrait--wiki {
+  background: #fff;
+}
+
+.ww-loom-portrait--wiki img {
+  padding: 12%;
+  object-fit: contain;
+}
+
+/* No picture: a plain circle in the object's color. */
+.ww-loom-portrait--plain {
+  background: currentColor;
+}
+
+.ww-loom-object figcaption {
+  position: absolute;
+  top: 100%;
+  width: max-content;
+  max-width: 160px;
+  margin-top: 14px;
+  font: 600 17px/1.2 var(--serif);
+  color: var(--ink);
+}
+
+.ww-loom-object--a figcaption {
+  left: 0;
+  text-align: left;
+}
+
+.ww-loom-object--b figcaption {
+  right: 0;
+  text-align: right;
+}
+
+/* Knots: real buttons laid over the threads. */
+.ww-loom-knots {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.ww-knot {
+  position: absolute;
+  max-width: 36%;
+  padding: 7px 15px;
+  border: 1.5px solid var(--verdigris);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--ink);
+  font: 500 15px/1.25 var(--sans);
+  text-align: center;
+  cursor: pointer;
+  pointer-events: auto;
+  transform: translate(-50%, -50%);
+  animation: ww-knot 0.45s ease-out both;
+  transition:
+    box-shadow 0.15s ease,
+    background 0.15s ease;
+}
+
+.ww-knot span {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.ww-knot--stop {
+  border-color: var(--ink-soft);
+}
+
+.ww-knot:hover {
+  box-shadow: 0 0 0 4px var(--verdigris-tint);
+}
+
+.ww-knot[aria-pressed='true'] {
+  border-color: var(--verdigris);
+  background: var(--verdigris);
+  color: #fff;
+}
+
+.ww-knot:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 3px;
+}
+
+@keyframes ww-knot {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%);
+  }
+}
+
+.ww-loom-direct {
+  position: absolute;
+  z-index: 2;
+  margin: 0;
+  padding: 2px 12px;
+  background: var(--ground);
+  color: var(--ink-soft);
+  font: italic 500 15px/1.3 var(--serif);
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
+}
+
+/* Legend under the loom: says in words what the colors mean. */
+.ww-loom-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin: 56px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.ww-loom-legend li {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.ww-swatch {
+  width: 24px;
+  border-top: 2px solid;
+}
+
+.ww-swatch--a {
+  border-color: var(--indigo);
+}
+
+.ww-swatch--b {
+  border-color: var(--weld);
+}
+
+.ww-swatch--knot {
+  width: 15px;
+  height: 15px;
+  border: 2px solid var(--verdigris);
+  border-radius: 50%;
+  background: var(--card);
+}
+
+.ww-swatch--stop {
+  width: 15px;
+  height: 15px;
+  border: 2px solid var(--ink-soft);
+  border-radius: 50%;
+  background: var(--card);
+}
+
+.ww-loom-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 20px;
+  margin-top: 14px;
+}
+
+.ww-loom-caption p {
+  margin: 0;
+  max-width: 70ch;
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.ww-loom-more {
+  display: flex;
+  gap: 18px;
+}
+
+.ww-loom-more .ww-text-button {
+  color: var(--indigo);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.ww-loom-counts {
+  margin: 10px 0 0;
+  max-width: 70ch;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+@media (max-width: 640px) {
+  .ww-knot {
+    padding: 6px 10px;
+    font-size: 14px;
+  }
+
+  .ww-loom-object figcaption {
+    max-width: 96px;
+    margin-top: 10px;
+    font-size: 14px;
+  }
+
+  .ww-loom-direct {
+    font-size: 13px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ww-thread {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+
+  .ww-knot {
+    animation: none;
+  }
+}

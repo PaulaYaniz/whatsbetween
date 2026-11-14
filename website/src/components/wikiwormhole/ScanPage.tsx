@@ -11,12 +11,45 @@ import './scan.css';
 type Detection = {label: string; box_2d: [number, number, number, number]};
 type Slot = 'A' | 'B';
 
+// Crops the detected object out of the scanned photo as a small square portrait.
+// box_2d is [ymin, xmin, ymax, xmax] on a 0–1000 scale.
+async function portraitFor(
+  frame: string,
+  boxes: Detection[],
+  label: string
+): Promise<string | undefined> {
+  const box = label ? boxes.find((item) => item.label === label)?.box_2d : undefined;
+  if (!frame || !box) return undefined;
+  try {
+    const image = new Image();
+    image.src = frame;
+    await image.decode();
+    const [ymin, xmin, ymax, xmax] = box.map((value) => value / 1000);
+    const cx = ((xmin + xmax) / 2) * image.naturalWidth;
+    const cy = ((ymin + ymax) / 2) * image.naturalHeight;
+    const side =
+      Math.max((xmax - xmin) * image.naturalWidth, (ymax - ymin) * image.naturalHeight) * 1.1;
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 240;
+    const context = canvas.getContext('2d');
+    if (!context) return undefined;
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, 240, 240);
+    context.drawImage(image, cx - side / 2, cy - side / 2, side, side, 0, 0, 240, 240);
+    return canvas.toDataURL('image/jpeg', 0.82);
+  } catch {
+    return undefined;
+  }
+}
+
 export function ScanPage() {
   const navigate = useNavigate();
   const video = useRef<HTMLVideoElement>(null);
   const upload = useRef<HTMLInputElement>(null);
   const stream = useRef<MediaStream | null>(null);
   const request = useRef<AbortController | null>(null);
+  // Which camera detection filled each slot, so its crop can become the object's portrait.
+  const slotLabels = useRef<Record<Slot, string>>({A: '', B: ''});
   const inFlight = useRef(false);
   const nextScanAt = useRef(0);
   const generation = useRef(0);
@@ -55,6 +88,7 @@ export function ScanPage() {
   function selectObject(label: string) {
     const slot = activeSlot || (!choices.current.A.query ? 'A' : 'B');
     choices.current[slot].setQuery(label);
+    slotLabels.current[slot] = label;
     setActiveSlot(slot === 'A' ? 'B' : 'A');
   }
   async function analyze(sourceFrame: string) {
@@ -80,6 +114,7 @@ export function ScanPage() {
       if (labels.length === 2 && !choices.current.A.query && !choices.current.B.query) {
         choices.current.A.setQuery(labels[0]);
         choices.current.B.setQuery(labels[1]);
+        slotLabels.current = {A: labels[0], B: labels[1]};
       }
       setNotice(
         labels.length ? '' : 'No clear objects found. Try a different view or type two names.'
@@ -200,13 +235,12 @@ export function ScanPage() {
     setNotice('Finding what your objects share…');
     try {
       const result = await connect(pair[0], pair[1]);
-      navigate('/discover', {
-        state: {
-          connection: result.connection,
-          resultToken: result.resultToken,
-          crops: boxes.map((item) => ({label: item.label, box_2d: item.box_2d})),
-          sampledFrame: frame,
-        },
+      const portraits = {
+        A: await portraitFor(frame ?? '', boxes, slotLabels.current.A),
+        B: await portraitFor(frame ?? '', boxes, slotLabels.current.B),
+      };
+      navigate(`/discover/${result.connection.source.id}/${result.connection.target.id}`, {
+        state: {connection: result.connection, resultToken: result.resultToken, portraits},
       });
     } catch (error) {
       setNotice(
@@ -342,7 +376,10 @@ export function ScanPage() {
                       maxLength={100}
                       autoComplete="off"
                       onFocus={() => setActiveSlot(slot)}
-                      onChange={(event) => choice.setQuery(event.target.value)}
+                      onChange={(event) => {
+                        slotLabels.current[slot] = '';
+                        choice.setQuery(event.target.value);
+                      }}
                     />
                     {choice.resolving && (
                       <p className="ww-article-state" role="status">

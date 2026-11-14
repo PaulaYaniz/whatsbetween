@@ -106,7 +106,7 @@
 }
 .ww-article-options legend {
   font:
-    12px 'DM Sans',
+    12px var(--sans),
     sans-serif;
   color: #596c62;
   padding: 0 0 8px;

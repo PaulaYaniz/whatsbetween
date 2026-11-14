@@ -1,4 +1,4 @@
-import type {Article, Connection, Evidence} from '../../worker/types';
+import type {Article, Connection, Evidence, PathInfo, PathStop} from '../../worker/types';
 
 export interface Card {
   candidateId: string;
@@ -42,11 +42,27 @@ async function ensureSession() {
   return sessionReady;
 }
 
+// Carries the server's error code (for example 'result_expired') so pages can recover.
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly code?: string,
+    readonly status?: number
+  ) {
+    super(message);
+  }
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   if (path !== '/session') await ensureSession();
   const response = await fetch(`/api${path}`, {credentials: 'same-origin', ...init});
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error?.message || 'That request could not be completed.');
+  if (!response.ok)
+    throw new ApiError(
+      data.error?.message || 'That request could not be completed.',
+      data.error?.code,
+      response.status
+    );
   return data as T;
 }
 
@@ -90,4 +106,4 @@ export async function recognize(image: File) {
   });
 }
 
-export type {Article, Connection, Evidence};
+export type {Article, Connection, Evidence, PathInfo, PathStop};

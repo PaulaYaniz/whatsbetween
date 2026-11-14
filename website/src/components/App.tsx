@@ -22,6 +22,7 @@ export const App: React.FC = () => {
         <Routes>
           <Route path="/" element={<ScanPage />} />
           <Route path="/discover" element={<DiscoverPage />} />
+          <Route path="/discover/:sourceId/:targetId" element={<DiscoverPage />} />
           <Route path="/saved" element={<SavedPage />} />
           {import.meta.env.DEV && <Route path="/legacy" element={<Home />} />}
           {import.meta.env.DEV && <Route path="/scan" element={<Camera />} />}
