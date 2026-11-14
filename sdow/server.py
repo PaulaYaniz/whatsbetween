@@ -5,6 +5,7 @@ Server web framework.
 import time
 import logging
 import google.cloud.logging
+from pathlib import Path
 
 from flask_cors import CORS
 from flask_compress import Compress
@@ -12,6 +13,8 @@ from flask import Flask, request, jsonify
 
 from sdow.database import Database
 from sdow.helpers import InvalidRequest, fetch_wikipedia_pages_info
+from sdow.vision import VisionService, create_blueprint
+from sdow.wikipath import create_blueprint as create_wiki_blueprint
 
 
 # Connect to the SDOW database.
@@ -21,6 +24,10 @@ database = Database(sdow_database='./sdow.sqlite', searches_database='./searches
 app = Flask(__name__)
 
 app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False
+app.register_blueprint(create_blueprint(VisionService(
+    Path(__file__).resolve().parent.parent / 'data' / 'vision-usage.sqlite')))
+# Live, bounded Wikipedia paths for scanned objects (the local SDOW graph is a mock).
+app.register_blueprint(create_wiki_blueprint())
 
 # Add support for cross-origin requests.
 CORS(app)
