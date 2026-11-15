@@ -295,7 +295,11 @@ async function api(request: Request, env: Env): Promise<Response> {
       );
     let connection = result.connection;
     if (body.candidateId) {
-      const selected = result.connection.sharedTopics.find(
+      const selected = [
+        ...result.connection.sharedTopics,
+        ...(result.connection.path?.steps ?? []).flat(),
+        ...(result.connection.path?.routes ?? []).flat(),
+      ].find(
         (topic) => String(topic.id) === body.candidateId
       );
       if (!selected)
@@ -320,6 +324,12 @@ async function api(request: Request, env: Env): Promise<Response> {
       signedCard?.connection.source.id !== connection.source.id ||
       signedCard?.connection.target.id !== connection.target.id))
       return json({error: {code: 'invalid_card', message: 'Refresh the explanation before saving.'}}, 400);
+    if (card?.evidence) {
+      connection = {
+        ...connection,
+        evidenceByTopic: {...connection.evidenceByTopic, [body.candidateId]: card.evidence},
+      };
+    }
     const finding: Finding | undefined = card ? {
       status: 'Supported finding', finding: card.headline,
       claims: [card.explanationSource, card.explanationTarget, card.whyInteresting].map(claim => ({claim, evidenceIds: card.evidenceIds})),

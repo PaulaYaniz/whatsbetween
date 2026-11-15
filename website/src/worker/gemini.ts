@@ -9,6 +9,7 @@ export interface DiscoveryCard {
   explanationTarget: string;
   whyInteresting: string;
   evidenceIds: string[];
+  evidence?: Connection['evidenceByTopic'][string];
   suggestedQuestions?: string[];
 }
 

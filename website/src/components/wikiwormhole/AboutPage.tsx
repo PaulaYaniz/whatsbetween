@@ -59,7 +59,7 @@ export function AboutPage() {
           <div>
             <h1>What’s Between…?</h1>
             <p className="ww-about-lead">
-              What's Between turns curiosity about your surroundings into discovery. Pick two
+              Turn curiosity about your surroundings into discovery. Pick two
               everyday objects and explore the surprising ideas that connect them.
             </p>
             <ol className="ww-about-steps">
