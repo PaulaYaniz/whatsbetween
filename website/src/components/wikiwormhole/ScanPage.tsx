@@ -135,7 +135,6 @@ export function ScanPage() {
   const [scanning, setScanning] = useState(false);
   const [objects, setObjects] = useState<string[]>([]);
   const [frame, setFrame] = useState<string | null>(null);
-  const [ratio, setRatio] = useState(4 / 3);
   const [notice, setNotice] = useState('');
   const [working, setWorking] = useState(false);
   const [activeSlot, setActiveSlot] = useState<Slot | null>(null);
@@ -320,7 +319,6 @@ export function ScanPage() {
     setNotice('');
     try {
       const image = await createImageBitmap(file);
-      setRatio(image.width / image.height);
       const photo = jpegFrom(image, image.width, image.height);
       image.close();
       setFrame(photo);
@@ -355,17 +353,9 @@ export function ScanPage() {
       <main className="ww-main ww-scan-page">
         <section className="ww-scan-layout" aria-label="Scan and select two objects">
           <div className="ww-camera-card">
-            {/* Fits the space left on screen while keeping the picture's proportions. */}
+            {/* Keeps the preview fitted to the inner camera-card frame. */}
             <div className="ww-camera-fit">
-              <div
-                className="ww-camera-stage"
-                style={
-                  {
-                    aspectRatio: camera || frame ? ratio : 4 / 3,
-                    '--ratio': camera || frame ? ratio : 4 / 3,
-                  } as React.CSSProperties
-                }
-              >
+              <div className="ww-camera-stage">
                 {camera || frame ? (
                   <div className="ww-video-wrap">
                     {camera ? (
@@ -375,10 +365,6 @@ export function ScanPage() {
                         muted
                         playsInline
                         aria-label="Live camera preview"
-                        onLoadedMetadata={() => {
-                          if (video.current?.videoWidth)
-                            setRatio(video.current.videoWidth / video.current.videoHeight);
-                        }}
                         onLoadedData={() => scanNow.current()}
                       />
                     ) : (
