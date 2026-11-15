@@ -10,69 +10,68 @@ const tools = [
     name: 'Gemini API',
     logo: '/logos/google-ai-studio.png',
     url: 'https://ai.google.dev/',
-    use: 'names the objects in a photo and writes the explanations',
+    use: 'Recognizes objects and explains links',
   },
   {
     name: 'Wikipedia API',
     logo: '/logos/wikipedia.svg',
     url: 'https://www.mediawiki.org/wiki/API:Main_page',
-    use: 'article search, current text and links',
+    use: 'Retrieves articles and source text',
   },
   {
-    name: 'SDOW link graph',
+    name: 'SDOW',
     logo: '/favicon-96x96.png',
     url: 'https://github.com/jwngr/sdow',
-    use: 'a December 2023 copy of every Wikipedia link, used to find routes',
+    use: 'Finds paths between article topics',
   },
   {
-    name: 'LangChain Deep Agents',
+    name: 'LangChain',
     logo: '/logos/langchain.svg',
     url: 'https://docs.langchain.com/oss/javascript/deepagents/overview',
-    use: 'runs Dig deeper, with a fact-checker and a calculator helper',
+    use: 'Orchestrates Deep research agents',
   },
   {
     name: 'Wolfram Alpha',
     logo: '/logos/wolfram.svg',
     url: 'https://www.wolframalpha.com/',
-    use: 'only when a question needs a number',
+    use: 'Calculates answers to numeric questions',
   },
   {
     name: 'MongoDB Atlas',
     logo: '/logos/mongodb.svg',
     url: 'https://www.mongodb.com/atlas',
-    use: 'stores the research log',
+    use: 'Saves findings and research evidence',
   },
   {
     name: 'Cloudflare Workers',
     logo: '/logos/cloudflare.svg',
     url: 'https://developers.cloudflare.com/workers/',
-    use: 'runs the API (the interface is React)',
+    use: 'Provides the backend API runtime',
   },
 ];
 
 export function AboutPage() {
   return (
     <Shell active="about">
-      <title>About | What's Between</title>
+      <title>About | What’s Between…?</title>
       <main className="ww-main ww-about">
         <div className="ww-about-grid">
           <div>
-            <h1>About</h1>
+            <h1>What’s Between…?</h1>
             <p className="ww-about-lead">
-              What's Between takes two objects in front of you and shows how their Wikipedia
-              articles connect.
+              What's Between turns curiosity about your surroundings into discovery. Pick two
+              everyday objects and explore the surprising ideas that connect them.
             </p>
             <ol className="ww-about-steps">
               <li>
-                Take or upload a photo. Pick two objects and check which article each one matches.
+                Scan your surroundings or upload a photo. Choose two objects that make you wonder.
               </li>
-              <li>See the topics both articles link to and the shortest route between them.</li>
-              <li>Read a short explanation with its sources, or ask a question with Dig deeper.</li>
+              <li>Explore connections through history, culture, science, and design.</li>
+              <li>
+                Ask a question with Deep research. AI agents investigate different angles, gather
+                sources, and review their findings. Save your investigation and keep exploring.
+              </li>
             </ol>
-            <p className="ww-about-note">
-              A shared link is a lead, not proof of a real-world connection. Explanations are
-              generated and can be wrong, so check the linked sources.
-            </p>
             <Link className="ww-button ww-button--dark ww-about-start" to="/">
               Scan two objects
             </Link>
@@ -105,9 +104,8 @@ export function AboutPage() {
             <section aria-labelledby="about-data">
               <h2 id="about-data">Your data</h2>
               <p>
-                Photos are sent to Gemini to be recognized; this app does not save them. The
-                research log is tied to this browser, with no account. Clearing cookies loses access
-                to it.
+                Photos are processed by Gemini, not saved. Research stays linked to this browser;
+                there are no accounts.
               </p>
             </section>
 
