@@ -48,6 +48,7 @@ async function ensureIndexes(db: Db) {
     db.collection('findings').createIndex({investigationId: 1, version: -1}, {unique: true}),
     db.collection('evidence').createIndex({investigationId: 1, sourceArticleId: 1, revisionId: 1}),
     db.collection('runs').createIndex({investigationId: 1, createdAt: -1}),
+    db.collection('runs').createIndex({expiresAt: 1}, {expireAfterSeconds: 0}),
   ]);
 }
 
@@ -61,8 +62,8 @@ function publicSummary(record: any): InvestigationSummary {
     source: record.source,
     target: record.target,
     question: record.question,
-    createdAt: record.createdAt,
-    updatedAt: record.updatedAt,
+    createdAt: new Date(record.createdAt).toISOString(),
+    updatedAt: new Date(record.updatedAt).toISOString(),
     runStatus: record.runStatus,
     finding: record.finding,
     version: record.version,
@@ -77,7 +78,7 @@ export async function saveInvestigation(
   question: string,
   finding?: Finding
 ) {
-  const now = new Date().toISOString();
+  const now = new Date();
   const id = crypto.randomUUID();
   const evidence = boundedEvidence(
     Object.values(connection.evidenceByTopic)
@@ -155,15 +156,21 @@ export async function appendFindingVersion(
     modelCalls: number;
     status: string;
     stopReason?: string;
+    question?: string;
+    answer?: string;
   }
 ) {
   return withDatabase(env, async (db) => {
     await ensureIndexes(db);
     const collection = db.collection('investigations');
-    const current = await collection.findOne({id: investigationId, ownerSessionId});
+    const current = await collection.findOneAndUpdate(
+      {id: investigationId, ownerSessionId},
+      {$inc: {version: 1}},
+      {returnDocument: 'after'}
+    );
     if (!current) return null;
-    const version = Number(current.version || 1) + 1;
-    const now = new Date().toISOString();
+    const version = Number(current.version);
+    const now = new Date();
     const bounded = boundedEvidence(evidence);
     if (bounded.length)
       await db
@@ -191,15 +198,43 @@ export async function appendFindingVersion(
       });
     await db
       .collection('runs')
-      .insertOne({investigationId, ownerSessionId, ...run, createdAt: now});
+      .insertOne({
+        investigationId,
+        ownerSessionId,
+        ...run,
+        createdAt: now,
+        expiresAt: new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000),
+      });
     await collection.updateOne(
       {id: investigationId, ownerSessionId},
-      {$set: {updatedAt: now, runStatus: run.status, version}}
+      {$set: {updatedAt: now, runStatus: run.status}}
     );
     const updated = await collection.findOne({id: investigationId, ownerSessionId});
     return updated
       ? {...publicSummary({...updated, finding, version}), evidenceCount: bounded.length}
       : null;
+  });
+}
+
+export async function loadResearchHistory(env: Env, ownerSessionId: string, id: string) {
+  return withDatabase(env, async (db) => {
+    const owner = await db.collection('investigations').findOne({id, ownerSessionId});
+    if (!owner) return null;
+    const runs = await db
+      .collection('runs')
+      .find({
+        investigationId: id,
+        ownerSessionId,
+        question: {$type: 'string'},
+        answer: {$type: 'string'},
+      })
+      .sort({createdAt: -1, _id: -1})
+      .limit(3)
+      .toArray();
+    return runs.reverse().flatMap((run) => [
+      {role: 'user' as const, content: String(run.question).slice(0, 1600)},
+      {role: 'assistant' as const, content: String(run.answer).slice(0, 1600)},
+    ]);
   });
 }
 
@@ -219,7 +254,15 @@ export async function loadInvestigation(env: Env, ownerSessionId: string, id: st
       .sort({retrievedAt: -1})
       .limit(24)
       .toArray();
-    return {...publicSummary({...record, finding: findings[0]?.finding}), findings, evidence};
+    return {
+      ...publicSummary({
+        ...record,
+        finding: findings[0]?.finding,
+        version: findings[0]?.version || record.version,
+      }),
+      findings,
+      evidence,
+    };
   });
 }
 

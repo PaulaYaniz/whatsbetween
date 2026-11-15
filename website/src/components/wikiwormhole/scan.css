@@ -207,6 +207,17 @@
   padding: 0;
   background: transparent;
   color: #192b30;
+  /* Boxes move every 50 ms as they follow the camera; glide between positions. */
+  transition:
+    top 60ms linear,
+    left 60ms linear,
+    width 60ms linear,
+    height 60ms linear;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ww-scan-page .ww-detection {
+    transition: none;
+  }
 }
 .ww-detection > span {
   position: absolute;
@@ -266,4 +277,80 @@
   .ww-scan-heading p {
     font-size: 14px;
   }
+}
+
+/* Fixed viewport layout for the scan page. */
+.ww-app > .ww-scan-page {
+  padding-left: 28px;
+  padding-right: 28px;
+}
+.ww-scan-heading {
+  flex: none;
+  margin-bottom: clamp(10px, 2vh, 26px);
+}
+.ww-scan-page .ww-scan-layout {
+  flex: 1;
+  min-height: 0;
+  align-items: stretch;
+}
+.ww-scan-page .ww-camera-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.ww-camera-fit {
+  flex: 1;
+  min-height: 0;
+  container-type: size;
+  display: grid;
+  place-items: center;
+}
+.ww-scan-page .ww-camera-fit .ww-camera-stage {
+  width: min(100cqw, calc(100cqh * var(--ratio)));
+  height: auto;
+  max-height: 100cqh;
+}
+.ww-scan-page .ww-actions,
+.ww-camera-privacy {
+  flex: none;
+}
+.ww-scan-page .ww-picks {
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+@media (max-width: 900px) {
+  .ww-app > .ww-scan-page {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .ww-scan-page .ww-scan-layout {
+    grid-template-rows: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ww-scan-page .ww-picks {
+    max-height: 46dvh;
+  }
+}
+@media (max-width: 900px) {
+  /* Readable headline on phones: let it wrap instead of shrinking to fit one line. */
+  .ww-scan-heading h1 {
+    white-space: normal;
+    font-size: 24px;
+  }
+}
+
+/* Keep the action within reach while choosing among article matches. */
+.ww-scan-page .ww-connect-row {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  /* Same white as the panel, so the sticky row does not show as a tinted box around the button. */
+  background: var(--card, #fff);
+  padding: 12px 0;
+  flex-shrink: 0;
+}
+.ww-scan-page .ww-article-list {
+  max-height: 180px;
+  overflow-y: auto;
 }

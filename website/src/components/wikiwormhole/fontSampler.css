@@ -1,0 +1,11 @@
+.ww-font-sampler{height:100dvh;overflow:auto;padding:clamp(24px,5vw,72px);background:#f3f5f4;color:#1e2740;font-family:system-ui,sans-serif}.ww-font-sampler header{max-width:760px;margin:0 auto 34px}.ww-font-sampler header span,.ww-font-meta{font:600 11px/1.4 system-ui,sans-serif;letter-spacing:.09em;text-transform:uppercase;color:#586174}.ww-font-sampler h1{font:600 clamp(32px,5vw,54px)/1.1 system-ui,sans-serif;letter-spacing:-.035em;margin:13px 0}.ww-font-sampler header p{font:16px system-ui,sans-serif;color:#586174}.ww-font-sampler section{max-width:760px;margin:auto;display:grid;gap:14px}.ww-font-sampler article{padding:22px 25px;background:white;border:1px solid #d5dbe0;border-radius:8px}.ww-font-meta{display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid #e6e9ec;padding-bottom:12px}.ww-font-meta strong{color:#34479b}.ww-font-sampler article h2{font-size:25px;font-weight:650;margin:15px 0 8px}.ww-font-sampler article h2 i{font-style:normal;color:#c99a06}.ww-font-sampler article p{font-size:15px;line-height:1.55;max-width:66ch}.ww-font-sampler article small{display:block;margin-top:13px;font-size:12px;color:#586174}
+/* Make each card's face choice explicit and visible throughout its specimen. */
+.ww-font-sampler article { font-family: var(--sample-font) !important; }
+.ww-font-sampler article h2,
+.ww-font-sampler article p,
+.ww-font-sampler article small { font-family: inherit; }
+.ww-font-sampler article:nth-child(1) { --sample-font: Arial, Helvetica, sans-serif; }
+.ww-font-sampler article:nth-child(2) { --sample-font: 'Courier New', Courier, monospace; }
+.ww-font-sampler article:nth-child(3) { --sample-font: 'Crimson Text', Georgia, serif; }
+.ww-font-sampler article:nth-child(4) { --sample-font: monospace; }
+.ww-font-sampler article:nth-child(5) { --sample-font: 'Quicksand', sans-serif; }

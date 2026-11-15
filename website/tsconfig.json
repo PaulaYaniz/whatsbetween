@@ -9,7 +9,7 @@
     "moduleResolution": "bundler",
     "isolatedModules": true,
 
-    // TODO: Remove this once migrating off styled-components.
+    // Skip dependency declaration checking; application code stays strict.
     "skipLibCheck": true,
 
     // Miscellaneous configuration.

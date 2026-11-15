@@ -41,6 +41,11 @@ interface Thread {
 interface Layout {
   height: number;
   anchorY: number;
+  // Centres of the two object portraits.
+  portraitA: Point;
+  portraitB: Point;
+  // Narrow screens lay path maps out top to bottom: object A above, object B below.
+  vertical: boolean;
   portrait: number;
   knots: Knot[];
   threads: Thread[];
@@ -48,9 +53,19 @@ interface Layout {
   unitsPerPx: number;
   // Widest a knot label may be, as a share of the loom width.
   knotMax: string;
+  // Rows were squeezed to fit the screen; knots use a smaller style.
+  compact: boolean;
+  // Shared articles left off the map because they do not fit (shown with "Show more").
+  hidden: number;
 }
 
 const WIDTH = 1000;
+
+// Top-to-bottom version of curve(), for the vertical layout.
+function curveDown(from: Point, to: Point, bend = 0.5) {
+  const dy = to.y - from.y;
+  return `M ${from.x} ${from.y} C ${from.x} ${from.y + dy * bend}, ${to.x} ${to.y - dy * bend}, ${to.x} ${to.y}`;
+}
 
 function curve(from: Point, to: Point, bend = 0.5) {
   const dx = to.x - from.x;
@@ -74,6 +89,76 @@ export function pathSteps(path: PathInfo | undefined) {
     for (let index = 0; index < route.length - 1; index++)
       links.add(`${route[index].id}>${route[index + 1].id}`);
   return {steps, links: [...links].map((key) => key.split('>').map(Number) as [number, number])};
+}
+
+// Keep only stops that still lie on a complete visible route after truncation.
+function connectedSteps(
+  steps: PathStop[][],
+  links: [number, number][],
+  sourceId: number,
+  targetId: number
+): PathStop[][] {
+  const forward = new Set([sourceId]);
+  const reachable = steps.map((column) => {
+    const next = column.filter((stop) =>
+      links.some(([from, to]) => to === stop.id && forward.has(from))
+    );
+    next.forEach((stop) => forward.add(stop.id));
+    return next;
+  });
+  const backward = new Set([targetId]);
+  for (const column of reachable.slice().reverse()) {
+    column
+      .filter((stop) => links.some(([from, to]) => from === stop.id && backward.has(to)))
+      .forEach((stop) => backward.add(stop.id));
+  }
+  return reachable.map((column) => column.filter((stop) => backward.has(stop.id)));
+}
+
+// Draw a sparse, representative set of real links between visible stops.
+function visibleLinks(
+  links: [number, number][],
+  steps: PathStop[][],
+  sourceId: number,
+  targetId: number
+): [number, number][] {
+  const columns = [[sourceId], ...steps.map((column) => column.map((stop) => stop.id)), [targetId]];
+  const chosen: [number, number][] = [];
+  for (let index = 0; index < columns.length - 1; index++) {
+    const left = columns[index];
+    const right = columns[index + 1];
+    const possible = links.filter(([from, to]) => left.includes(from) && right.includes(to));
+    const distance = ([from, to]: [number, number]) =>
+      Math.abs((left.indexOf(from) + 0.5) / left.length - (right.indexOf(to) + 0.5) / right.length);
+    for (const from of left) {
+      const best = possible
+        .filter((edge) => edge[0] === from)
+        .sort((a, b) => distance(a) - distance(b))[0];
+      if (best) chosen.push(best);
+    }
+    for (const to of right) {
+      if (chosen.some((edge) => edge[1] === to)) continue;
+      const best = possible
+        .filter((edge) => edge[1] === to)
+        .sort((a, b) => distance(a) - distance(b))[0];
+      if (best) chosen.push(best);
+    }
+    // A few additional real links show that some stops branch more than others.
+    // Keep each middle stop below five links in either direction.
+    if (index > 0 && index < columns.length - 2) {
+      for (const from of left) {
+        const available = possible.filter((edge) => edge[0] === from);
+        const desired = Math.min(5, available.length, 1 + (Math.abs(from) % 5));
+        for (const edge of available.sort((a, b) => distance(a) - distance(b))) {
+          if (chosen.filter((item) => item[0] === from).length >= desired) break;
+          if (chosen.some((item) => item[0] === edge[0] && item[1] === edge[1])) continue;
+          if (chosen.filter((item) => item[1] === edge[1]).length >= 5) continue;
+          chosen.push(edge);
+        }
+      }
+    }
+  }
+  return [...new Map(chosen.map((edge) => [edge.join('>'), edge])).values()];
 }
 
 // The busiest full route through a stop, following the links shown on the map.
@@ -101,19 +186,31 @@ export function busiestRoute(connection: Connection, stopId: number): Article[] 
   return route.map((id) => byId.get(id)).filter((item): item is Article => Boolean(item));
 }
 
-function buildLayout(connection: Connection, width: number): Layout {
+function buildLayout(
+  connection: Connection,
+  width: number,
+  availableHeight = 0,
+  expanded = false
+): Layout {
   const unitsPerPx = WIDTH / width;
   const narrow = width < 640;
-  const portrait = narrow ? 56 : 88;
+  const portrait = narrow ? 56 : availableHeight && availableHeight < 380 ? 64 : 88;
   const ax = (portrait + 6) * unitsPerPx;
   const bx = WIDTH - ax;
   const mid = WIDTH / 2;
-  const row = (narrow ? 54 : 48) * unitsPerPx;
+  const maxRow = narrow ? 54 : 48;
+  // Rows shrink to fit the height available (down to 30 px) so the whole map stays on screen.
+  const fitRow = (count: number, reservedPx = 0) => {
+    if (!availableHeight || !count) return maxRow * unitsPerPx;
+    const px = (availableHeight - 64 - reservedPx) / count;
+    return Math.max(narrow ? 28 : 30, Math.min(maxRow, px)) * unitsPerPx;
+  };
+  let row = maxRow * unitsPerPx;
   const pad = 30 * unitsPerPx;
   const minHeight = (portrait + 90) * unitsPerPx;
   const path = connection.path;
   const shared = connection.sharedTopics;
-  const direct = Boolean(path?.found && path.hops === 1);
+  const direct = expanded && Boolean(path?.found && path.hops === 1);
   const sourceId = connection.source.id;
   const targetId = connection.target.id;
   const knots: Knot[] = [];
@@ -122,13 +219,27 @@ function buildLayout(connection: Connection, width: number): Layout {
   let anchorY = minHeight / 2;
   let directLabel: Point | undefined;
   let knotMax = '36%';
+  // Columns are narrow (many steps or a small screen): use the compact knot style.
+  let tight = false;
+  let vertical = false;
+  let portraitA: Point | undefined;
+  let portraitB: Point | undefined;
 
+  let hidden = 0;
   if (shared.length) {
-    const topBand = direct ? 64 * unitsPerPx : 0;
+    // Keep the regular map small; expansion adds only as many articles as fit.
+    const band = direct ? 48 : 0;
+    const capacity = availableHeight
+      ? Math.max(4, Math.floor((availableHeight - 50 - band) / (narrow ? 28 : 30)))
+      : shared.length;
+    const visible = shared.slice(0, Math.min(expanded ? 24 : 8, capacity));
+    hidden = shared.length - visible.length;
+    const topBand = band * unitsPerPx;
+    row = fitRow(visible.length, band);
     const top = pad + topBand;
-    height = Math.max(minHeight + topBand, top + row * shared.length + pad);
-    anchorY = top + (row * shared.length) / 2;
-    shared.forEach((article, index) => {
+    height = Math.max(minHeight + topBand, top + row * visible.length + pad);
+    anchorY = top + (row * visible.length) / 2;
+    visible.forEach((article, index) => {
       const at = {x: mid, y: top + row * (index + 0.5)};
       const key = `shared-${article.id}`;
       knots.push({key, article, kind: 'shared', at, delay: 380 + index * 45});
@@ -149,11 +260,94 @@ function buildLayout(connection: Connection, width: number): Layout {
         }
       );
     });
+  } else if (path?.found && (path.hops ?? 0) >= 2 && narrow) {
+    // Phones: object A on top, each step a row of up to three stops, object B at the bottom, so
+    // the whole map fits the width without sideways scrolling.
+    vertical = true;
+    tight = true;
+    knotMax = '31%';
+    const raw = pathSteps(path);
+    const limit = expanded ? 24 : 8;
+    const steps = connectedSteps(
+      raw.steps.map((column, index) =>
+        column.slice(
+          0,
+          Math.floor(limit / raw.steps.length) + (index < limit % raw.steps.length ? 1 : 0)
+        )
+      ),
+      raw.links,
+      sourceId,
+      targetId
+    );
+    const links = visibleLinks(raw.links, steps, sourceId, targetId);
+    const perLine = 3;
+    const line = 46 * unitsPerPx;
+    const gap = 34 * unitsPerPx;
+    const radius = (portrait / 2) * unitsPerPx;
+    const bands = steps.map((column) => Math.max(1, Math.ceil(column.length / perLine)) * line);
+    height =
+      pad * 2 + radius * 4 + bands.reduce((sum, band) => sum + band, 0) + gap * (steps.length + 1);
+    portraitA = {x: mid, y: pad + radius};
+    portraitB = {x: mid, y: height - pad - radius};
+    anchorY = height / 2;
+    const position = new Map<number, Point>([
+      [sourceId, {x: mid, y: portraitA.y + radius}],
+      [targetId, {x: mid, y: portraitB.y - radius}],
+    ]);
+    const stepOf = new Map<number, number>([[sourceId, 0]]);
+    let y = pad + radius * 2 + gap;
+    steps.forEach((column, index) => {
+      const step = index + 1;
+      column.forEach((stop, i) => {
+        const lineIndex = Math.floor(i / perLine);
+        const inLine = Math.min(perLine, column.length - lineIndex * perLine);
+        const at = {x: (WIDTH * ((i % perLine) + 0.5)) / inLine, y: y + line * (lineIndex + 0.5)};
+        position.set(stop.id, at);
+        stepOf.set(stop.id, step);
+        knots.push({
+          key: `stop-${stop.id}`,
+          article: stop,
+          kind: 'stop',
+          at,
+          step,
+          through: stop.through,
+          delay: 300 + step * 260,
+        });
+      });
+      y += bands[index] + gap;
+    });
+    for (const [from, to] of links) {
+      const start = position.get(from);
+      const end = position.get(to);
+      if (!start || !end) continue;
+      threads.push({
+        key: `${from}>${to}`,
+        d: curveDown(start, end),
+        tone: from === sourceId ? 'a' : to === targetId ? 'b' : 'between',
+        ends: [from, to],
+        delay: (stepOf.get(from) ?? 0) * 260,
+      });
+    }
   } else if (path?.found && (path.hops ?? 0) >= 2) {
     const hops = path.hops ?? 2;
-    const {steps, links} = pathSteps(path);
+    const raw = pathSteps(path);
+    const limit = expanded ? 24 : 8;
+    const steps = connectedSteps(
+      raw.steps.map((column, index) =>
+        column.slice(
+          0,
+          Math.floor(limit / raw.steps.length) + (index < limit % raw.steps.length ? 1 : 0)
+        )
+      ),
+      raw.links,
+      sourceId,
+      targetId
+    );
+    const links = visibleLinks(raw.links, steps, sourceId, targetId);
     knotMax = `${Math.max(14, Math.round(80 / hops))}%`;
+    tight = width / hops < 230;
     const tallest = Math.max(1, ...steps.map((column) => column.length));
+    row = fitRow(tallest);
     height = Math.max(minHeight, pad * 2 + tallest * row);
     anchorY = height / 2;
     const position = new Map<number, Point>([
@@ -207,7 +401,22 @@ function buildLayout(connection: Connection, width: number): Layout {
     directLabel = {x: mid, y: crestY};
   }
 
-  return {height, anchorY, portrait, knots, threads, directLabel, unitsPerPx, knotMax};
+  const radius = (portrait / 2) * unitsPerPx;
+  return {
+    height,
+    anchorY,
+    portraitA: portraitA ?? {x: radius, y: anchorY},
+    portraitB: portraitB ?? {x: WIDTH - radius, y: anchorY},
+    vertical,
+    portrait,
+    knots,
+    threads,
+    directLabel,
+    unitsPerPx,
+    knotMax,
+    compact: row / unitsPerPx < 40 || tight,
+    hidden,
+  };
 }
 
 // Every page connected to the selected one through the drawn links, in both directions.
@@ -241,7 +450,8 @@ function Portrait({
   side: 'a' | 'b';
   size: number;
 }) {
-  const src = image || article.thumbnailUrl;
+  // Only the user's own camera crop; never a stock Wikipedia picture.
+  const src = image;
   return (
     <figure className={`ww-loom-object ww-loom-object--${side}`} style={{width: size}}>
       <div
@@ -259,34 +469,37 @@ export function ConnectionLoom({
   connection,
   portraits,
   selectedKey,
+  expanded = false,
   onSelect,
 }: {
   connection: Connection;
   portraits?: {A?: string; B?: string};
   selectedKey?: string;
+  expanded?: boolean;
   onSelect: (selection: LoomSelection, key: string) => void;
 }) {
   const frame = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(960);
+  const [size, setSize] = useState({width: 960, height: 0});
+  const width = size.width;
   const [hot, setHot] = useState<string | null>(null);
   useEffect(() => {
     const element = frame.current;
     if (!element) return;
     const observer = new ResizeObserver(([entry]) =>
-      setWidth(Math.max(280, Math.round(entry.contentRect.width)))
+      setSize({
+        width: Math.max(280, Math.round(entry.contentRect.width)),
+        height: Math.round(entry.contentRect.height),
+      })
     );
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
-  // Path maps need room for their columns: on narrow screens they keep a minimum width and scroll
-  // sideways instead of squeezing labels together.
-  const pathMode =
-    !connection.sharedTopics.length &&
-    Boolean(connection.path?.found && (connection.path.hops ?? 0) >= 2);
-  const minimum = pathMode ? 640 + Math.max(0, (connection.path?.hops ?? 2) - 3) * 180 : 0;
-  const layoutWidth = Math.max(width, minimum);
-  const scrolls = layoutWidth > width;
-  const layout = useMemo(() => buildLayout(connection, layoutWidth), [connection, layoutWidth]);
+  // The whole map always fits the available width: no sideways scrolling.
+  const layoutWidth = width;
+  const layout = useMemo(
+    () => buildLayout(connection, layoutWidth, size.height, expanded),
+    [connection, layoutWidth, size.height, expanded]
+  );
   const lit = layout.knots.find((knot) => knot.key === (hot ?? selectedKey));
   const reached = useMemo(
     () => (lit ? connectedTo(lit.article.id, layout.threads) : null),
@@ -312,20 +525,12 @@ export function ConnectionLoom({
   const total = connection.path?.totalPaths;
 
   return (
-    <div className="ww-loom" ref={frame}>
-      <div
-        className="ww-loom-scroll"
-        tabIndex={scrolls ? 0 : undefined}
-        role={scrolls ? 'region' : undefined}
-        aria-label={scrolls ? 'Connection map, scroll sideways to see all of it' : undefined}
-      >
-        <div
-          className="ww-loom-frame"
-          style={{
-            aspectRatio: `${WIDTH} / ${layout.height}`,
-            width: scrolls ? layoutWidth : undefined,
-          }}
-        >
+    <div
+      className={`ww-loom${layout.compact ? ' ww-loom--compact' : ''}${layout.vertical ? ' ww-loom--vertical' : ''}${selectedKey ? '' : ' ww-loom--inviting'}`}
+      ref={frame}
+    >
+      <div className="ww-loom-scroll">
+        <div className="ww-loom-frame" style={{aspectRatio: `${WIDTH} / ${layout.height}`}}>
           <svg
             className="ww-loom-threads"
             viewBox={`0 0 ${WIDTH} ${layout.height}`}
@@ -344,10 +549,7 @@ export function ConnectionLoom({
             ))}
           </svg>
 
-          <div
-            className="ww-loom-anchor ww-loom-anchor--a"
-            style={{top: `${(layout.anchorY / layout.height) * 100}%`}}
-          >
+          <div className="ww-loom-anchor ww-loom-anchor--a" style={percent(layout.portraitA)}>
             <Portrait
               article={connection.source}
               image={portraits?.A}
@@ -355,10 +557,7 @@ export function ConnectionLoom({
               size={layout.portrait}
             />
           </div>
-          <div
-            className="ww-loom-anchor ww-loom-anchor--b"
-            style={{top: `${(layout.anchorY / layout.height) * 100}%`}}
-          >
+          <div className="ww-loom-anchor ww-loom-anchor--b" style={percent(layout.portraitB)}>
             <Portrait
               article={connection.target}
               image={portraits?.B}
@@ -384,7 +583,7 @@ export function ConnectionLoom({
                   ? `${knot.article.title}: both ${a} and ${b} link here`
                   : `${knot.article.title}: step ${knot.step} of ${connection.path?.hops}${
                       total
-                        ? `, on ${knot.through?.toLocaleString()} of ${total.toLocaleString()} shortest paths`
+                        ? `, on ${knot.through?.toLocaleString()} of ${total.toLocaleString()} connecting paths`
                         : ''
                     }`;
               return (
@@ -423,7 +622,6 @@ export function ConnectionLoom({
           </div>
         </div>
       </div>
-      {scrolls && <p className="ww-loom-swipe">Swipe sideways to see the whole map.</p>}
     </div>
   );
 }

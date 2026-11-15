@@ -64,6 +64,9 @@ export interface PathInfo {
   source: 'graph' | 'unavailable';
   found: boolean;
   hops?: number;
+  // False when the route had to follow some Wikipedia links backwards (B links to A rather than
+  // A to B) to pass through at least one other article. Steps then mean "linked", not "links to".
+  directed?: boolean;
   routes: Article[][];
   snapshot?: string;
   reason?: string;
@@ -73,6 +76,8 @@ export interface PathInfo {
   shownPaths?: number;
   steps?: PathStop[][];
   links?: [number, number][];
+  // Steps (as [fromId, toId] in route order) where the Wikipedia link points the other way.
+  reversedLinks?: [number, number][];
 }
 
 export interface PathStop extends Article {
@@ -81,6 +86,7 @@ export interface PathStop extends Article {
 }
 
 export interface SignedResult {
+  discoveryCard?: import('./gemini').DiscoveryCard;
   sessionId: string;
   expiresAt: number;
   connection: Connection;

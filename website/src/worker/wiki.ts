@@ -172,7 +172,7 @@ export async function searchArticles(query: string, budget: RequestBudget, graph
   };
 }
 
-export async function articleDetails(ids: number[], budget: RequestBudget, fullText = false) {
+export async function articleDetails(ids: number[], budget: RequestBudget, fullText = false): Promise<WikiArticleRecord[]> {
   const unique = [...new Set(ids)].filter((id) => Number.isSafeInteger(id) && id > 0).slice(0, 14);
   if (!unique.length) return [];
   const data = await queryWiki(
@@ -288,6 +288,7 @@ export async function graphPath(
     url.searchParams.set('source', String(sourceId));
     url.searchParams.set('target', String(targetId));
     url.searchParams.set('perStep', String(perStep));
+    url.searchParams.set('preferIndirect', '1');
     const response = await fetch(url, {signal: AbortSignal.timeout(8000)});
     const body = (await response.json()) as any;
     if (!response.ok) {
@@ -312,6 +313,7 @@ export async function graphPath(
       source: 'graph',
       found: Boolean(body.found),
       hops: typeof body.hops === 'number' ? body.hops : undefined,
+      directed: typeof body.directed === 'boolean' ? body.directed : undefined,
       routes,
       totalPaths: Number(body.totalPaths) || 0,
       shownPaths: Number(body.shownPaths) || 0,
@@ -319,50 +321,14 @@ export async function graphPath(
       links: (body.links || [])
         .filter((link: unknown) => Array.isArray(link) && link.length === 2)
         .map((link: number[]) => [Number(link[0]), Number(link[1])] as [number, number]),
+      reversedLinks: (body.reversedLinks || [])
+        .filter((link: unknown) => Array.isArray(link) && link.length === 2)
+        .map((link: number[]) => [Number(link[0]), Number(link[1])] as [number, number]),
       snapshot: typeof body.snapshot === 'string' ? body.snapshot : undefined,
       ...(body.found ? {} : {reason: 'no_path_within_limit'}),
     };
   } catch {
     return {source: 'unavailable', found: false, routes: [], reason: 'graph_unreachable'};
-  }
-}
-
-// Asks the local full-graph service for shared topics. Returns null on any failure so the caller
-// can fall back to live Wikipedia lookups.
-async function graphSharedTopics(baseUrl: string, sourceId: number, targetId: number) {
-  try {
-    const url = new URL('/api/graph/shared-topics', baseUrl);
-    url.searchParams.set('source', String(sourceId));
-    url.searchParams.set('target', String(targetId));
-    const response = await fetch(url, {signal: AbortSignal.timeout(3000)});
-    if (!response.ok) return null;
-    const body = (await response.json()) as {
-      snapshot?: unknown;
-      topics?: unknown;
-      total?: unknown;
-      sourceLinks?: unknown;
-      targetLinks?: unknown;
-    };
-    if (typeof body.snapshot !== 'string' || !Array.isArray(body.topics)) return null;
-    const count = (value: unknown) => (typeof value === 'number' && value >= 0 ? value : 0);
-    const topics: Article[] = body.topics
-      .filter((item: any) => Number.isSafeInteger(item?.id) && typeof item?.title === 'string')
-      .map((item: {id: number; title: string}) => ({
-        id: item.id,
-        title: item.title,
-        url: `https://en.wikipedia.org/wiki/${encodeURIComponent(item.title.replaceAll(' ', '_'))}`,
-      }));
-    return {
-      snapshot: body.snapshot,
-      topics,
-      linkCounts: {
-        source: count(body.sourceLinks),
-        target: count(body.targetLinks),
-        shared: count(body.total),
-      },
-    };
-  } catch {
-    return null;
   }
 }
 
@@ -410,41 +376,28 @@ export async function connectArticles(
     };
   }
 
-  // Prefer the local full-graph snapshot when configured; it makes no Wikipedia link requests.
-  const graph = graphUrl ? await graphSharedTopics(graphUrl, source.id, target.id) : null;
-  let topics: {id: number; title: string; description?: string; disambiguation?: boolean}[];
-  let linkCompleteness = {source: true, target: true};
-  if (graph) {
-    topics = graph.topics;
-  } else {
-    // Keep upstream calls sequential and bounded to follow Wikimedia's API guidance.
-    const fromSource = await outgoingLinks(source.id, budget);
-    const fromTarget = await outgoingLinks(target.id, budget);
-    const sourceIds = new Set(fromSource.links.map((page) => page.id));
-    topics = fromTarget.links.filter(
-      (page) => sourceIds.has(page.id) && !page.disambiguation && !GENERIC_TITLE.test(page.title)
-    );
-    linkCompleteness = {source: fromSource.complete, target: fromTarget.complete};
-  }
-  const complete = linkCompleteness.source && linkCompleteness.target;
-  // Graph results are already ranked by the service (hubs removed, specific topics first).
-  if (!graph) {
-    topics.sort((a, b) => {
-      const score = (title: string) =>
-        GENERIC_TITLE.test(title) ? 100 : title.split(/\s+/).length <= 2 ? 0 : 1;
-      return score(a.title) - score(b.title) || a.title.localeCompare(b.title);
-    });
-  }
-  let selected = topics
-    .slice(0, 12)
-    .map((item) => ({
-      id: item.id,
-      title: item.title,
-      url: `https://en.wikipedia.org/wiki/${encodeURIComponent(item.title.replaceAll(' ', '_'))}`,
-      ...(item.description ? {description: item.description} : {}),
-      ...(item.disambiguation ? {disambiguation: true} : {}),
-    }));
+  // Discovery uses connecting routes only; no independent shared-topic lookup.
+  let selected: Article[] = [];
+  const linkCompleteness = {source: true, target: true};
   const path = await pathFor(graphUrl, source.id, target.id);
+  // Old snapshots may retain pages that now redirect (for example, object synonyms).
+  // Resolve each endpoint separately so canonical IDs remain associated with the right pick.
+  if (!path.found && budget.used + 2 <= budget.limit) {
+    try {
+      const currentSource = (await articleDetails([source.id], budget))[0]?.article;
+      const currentTarget = (await articleDetails([target.id], budget))[0]?.article;
+      if (
+        currentSource &&
+        currentTarget &&
+        (currentSource.id !== source.id || currentTarget.id !== target.id)
+      ) {
+        return connectArticles(currentSource.id, currentTarget.id, budget, graphUrl);
+      }
+    } catch (error) {
+      if (!(error instanceof WikiError)) throw error;
+    }
+  }
+
   // One batched Wikipedia request (max 14 pages) supplies descriptions and pictures for both
   // objects plus either the shared topics or, when there are none, the stops along the routes.
   // Descriptions for the shown stops (busiest first), within the 14-page batch.
@@ -456,20 +409,30 @@ export async function connectArticles(
   ];
   let details: WikiArticleRecord[] = [];
   if (budget.used < budget.limit) {
+    // Descriptions, pictures and passages are a bonus on top of the graph result: if Wikipedia is
+    // slow or throttling, give up after a few seconds and still return the map.
+    const ids = [
+      source.id,
+      target.id,
+      ...(selected.length ? selected.map((item) => item.id) : pathStops),
+    ];
+    const giveUp = new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new WikiError('Wikipedia details timed out.', 504, 'time_limit')),
+        6000
+      )
+    );
     try {
-      details = await articleDetails(
-        [source.id, target.id, ...(selected.length ? selected.map((item) => item.id) : pathStops)],
-        budget
-      );
+      details = await Promise.race([articleDetails(ids, budget), giveUp]);
     } catch (error) {
-      if (!(error instanceof WikiError) || error.code !== 'request_limit') throw error;
+      if (!(error instanceof WikiError)) throw error;
     }
   }
   const byId = new Map<number, WikiArticleRecord>(
     details.map((record: WikiArticleRecord) => [record.article.id, record])
   );
   // The snapshot is from 2023: drop topics whose pages no longer resolve on Wikipedia.
-  if (graph && details.length) selected = selected.filter((topic) => byId.has(topic.id));
+
   const enrich = <T extends {id: number}>(item: T): T => {
     const live = byId.get(item.id)?.article;
     if (!live) return item;
@@ -510,18 +473,11 @@ export async function connectArticles(
     sharedTopics: selected,
     evidenceByTopic,
     linkCompleteness,
-    status: topics.length
-      ? complete
-        ? 'found'
-        : 'partial'
-      : complete
-        ? 'no_shared_topics'
-        : 'partial',
+    status: path.found ? 'found' : 'no_shared_topics',
     retrievedAt,
     requestCount: budget.used,
-    ...(graph
-      ? {linkSource: 'graph' as const, graphSnapshot: graph.snapshot, linkCounts: graph.linkCounts}
-      : {linkSource: 'live' as const}),
+    linkSource: 'graph',
+    graphSnapshot: path.snapshot,
     path: shownPath,
   };
 }

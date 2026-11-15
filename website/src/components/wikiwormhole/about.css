@@ -1,46 +1,61 @@
+/* About: a single screen, like the other pages. Two columns on desktop; on small screens it
+   stacks and scrolls inside .ww-main. */
 .ww-about {
   max-width: 1120px;
-  padding: 64px 32px 56px;
+  justify-content: center;
 }
 .ww-about a {
-  color: #285e4b;
-  text-underline-offset: 4px;
+  color: var(--verdigris);
+  text-underline-offset: 3px;
   text-decoration-thickness: 1px;
 }
 .ww-about a:hover {
-  color: #173e32;
+  color: var(--ink);
 }
-.ww-about a:focus-visible,
-.ww-about summary:focus-visible {
-  outline: 2px solid #397564;
-  outline-offset: 4px;
+.ww-about a:focus-visible {
+  outline: 2px solid var(--verdigris);
+  outline-offset: 3px;
   border-radius: 2px;
 }
-.ww-about ::selection {
-  background: #badfd0;
-  color: #192b30;
+.ww-about-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: clamp(32px, 5vw, 72px);
+  align-items: start;
 }
-.ww-about-intro {
-  max-width: 760px;
-  margin-bottom: 64px;
-}
-.ww-about-intro h1 {
+.ww-about h1 {
   font:
-    700 clamp(34px, 4.4vw, 54px)/1.16 var(--serif),
+    700 clamp(32px, 4vw, 46px)/1.1 var(--serif),
     sans-serif;
-  letter-spacing: -0.035em;
-  margin: 0 0 24px;
-  text-wrap: balance;
+  margin: 0 0 16px;
 }
-.ww-about-intro h1 span {
-  color: #397564;
-}
-.ww-about-intro > p {
+.ww-about-lead {
   font-size: 18px;
-  line-height: 1.7;
-  max-width: 62ch;
-  color: #53675d;
-  margin: 0 0 28px;
+  line-height: 1.55;
+  margin: 0 0 22px;
+  max-width: 46ch;
+}
+.ww-about-steps {
+  margin: 0 0 22px;
+  padding-left: 22px;
+  display: grid;
+  gap: 10px;
+}
+.ww-about-steps li {
+  font-size: 15px;
+  line-height: 1.55;
+  padding-left: 4px;
+}
+.ww-about-steps li::marker {
+  color: var(--verdigris);
+  font-weight: 700;
+}
+.ww-about-note {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--muted);
+  margin: 0 0 24px;
+  max-width: 52ch;
 }
 .ww-about .ww-about-start {
   display: inline-flex;
@@ -49,172 +64,52 @@
   color: #fff;
   text-decoration: none;
 }
-.ww-about .ww-about-start:hover {
-  color: #fff;
-  background: #294139;
-}
-.ww-about-section {
+.ww-about-side {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
-  gap: 40px;
-  border-top: 1px solid var(--line);
-  padding: 36px 0 40px;
+  gap: 22px;
 }
 .ww-about h2 {
   font:
-    600 22px/1.4 var(--serif),
+    700 13px/1.4 var(--sans),
     sans-serif;
-  letter-spacing: -0.025em;
-  margin: 0;
-  text-wrap: balance;
-}
-.ww-about p,
-.ww-about dd {
-  font-size: 15px;
-  line-height: 1.75;
-}
-.ww-about-prose p,
-.ww-about-credit p {
-  margin: 0 0 18px;
-  max-width: 72ch;
-}
-.ww-about-prose p:last-child,
-.ww-about-credit p:last-child {
-  margin-bottom: 0;
-}
-.ww-about-steps {
-  margin: 0;
-  padding-left: 22px;
-  display: grid;
-  gap: 24px;
-}
-.ww-about-steps li {
-  padding-left: 8px;
-}
-.ww-about-steps li::marker {
-  color: #397564;
-  font-weight: 600;
-}
-.ww-about-steps h3 {
-  font:
-    600 16px/1.5 var(--serif),
-    sans-serif;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
   margin: 0 0 8px;
 }
-.ww-about-steps p {
-  margin: 0;
-  max-width: 72ch;
-}
-.ww-about-credit {
-  display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
-  gap: 40px;
-  background: #e7eee4;
-  border: 1px solid #ccd9ca;
-  border-radius: 13px;
-  padding: 32px;
-  margin: 0 -32px 40px;
-}
-.ww-about-credit .ww-about-credit-author {
-  margin: 16px 0 0;
-  font-size: 13px;
-  line-height: 1.7;
-  color: #53675d;
-}
-.ww-about-credit .ww-about-credit-license {
-  font-size: 13px;
-  color: #53675d;
-}
-.ww-about-project-link {
-  display: inline-block;
+.ww-about-side p {
   font-size: 14px;
-  font-weight: 600;
-  line-height: 1.6;
+  line-height: 1.55;
+  margin: 0;
 }
 .ww-about-tools {
   margin: 0;
 }
 .ww-about-tools > div {
-  padding: 0 0 20px;
-  margin: 0 0 20px;
+  display: grid;
+  grid-template-columns: 11.5em minmax(0, 1fr);
+  gap: 12px;
+  padding: 6px 0;
   border-bottom: 1px solid var(--line);
-}
-.ww-about-tools > div:last-child {
-  border-bottom: 0;
-  margin-bottom: 0;
+  font-size: 14px;
+  line-height: 1.45;
 }
 .ww-about-tools dt {
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1.6;
-  margin-bottom: 6px;
+  font-weight: 700;
 }
 .ww-about-tools dd {
   margin: 0;
-  color: #53675d;
+  color: var(--ink-soft);
 }
-.ww-about-details {
-  border-top: 1px solid var(--line);
-  margin-top: 4px;
-  padding-top: 14px;
-}
-.ww-about-details summary {
-  font-size: 14px;
-  line-height: 1.6;
-  font-weight: 600;
-  cursor: pointer;
-  min-height: 44px;
-  padding: 10px 0;
-  color: #285e4b;
-}
-.ww-about-details > div {
-  padding-top: 12px;
-}
-.ww-about-details p {
-  color: #53675d;
-  font-size: 14px;
-  margin: 0 0 16px;
-}
-.ww-about-ending {
-  border-top: 1px solid var(--line);
-  padding-top: 28px;
-  color: #53675d;
-}
-@media (max-width: 760px) {
+@media (max-width: 860px) {
   .ww-about {
-    padding: 40px 20px 44px;
+    justify-content: flex-start;
   }
-  .ww-about-intro {
-    margin-bottom: 40px;
-  }
-  .ww-about-intro > p {
-    font-size: 16px;
-  }
-  .ww-about-section {
+  .ww-about-grid {
     grid-template-columns: minmax(0, 1fr);
-    gap: 20px;
-    padding: 28px 0 32px;
   }
-  .ww-about h2 {
-    font-size: 21px;
-  }
-  .ww-about-credit {
+  .ww-about-tools > div {
     grid-template-columns: minmax(0, 1fr);
-    gap: 24px;
-    margin: 0 0 32px;
-    padding: 24px;
-  }
-  .ww-about-credit .ww-about-credit-author {
-    margin-top: 12px;
-  }
-  .ww-about-intro h1 {
-    letter-spacing: -0.03em;
-  }
-  .ww-about p,
-  .ww-about dd {
-    font-size: 14px;
-  }
-  .ww-about-section h2 {
-    max-width: none;
+    gap: 2px;
   }
 }

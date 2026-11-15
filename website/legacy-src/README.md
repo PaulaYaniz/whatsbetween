@@ -1,0 +1,1 @@
+Archived SDOW UI source retained for reference and MIT attribution. These pages are outside the active TypeScript/build inputs. Their old dependencies are no longer installed. Legacy blog URLs redirect to /about.

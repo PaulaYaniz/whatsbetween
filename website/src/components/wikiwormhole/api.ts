@@ -1,6 +1,7 @@
 import type {Article, Connection, Evidence, PathInfo, PathStop} from '../../worker/types';
 
 export interface Card {
+  saveToken?: string;
   candidateId: string;
   headline: string;
   explanationSource: string;

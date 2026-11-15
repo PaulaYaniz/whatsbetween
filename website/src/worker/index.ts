@@ -8,6 +8,7 @@ import {
   deleteInvestigation,
   listInvestigations,
   loadInvestigation,
+  loadResearchHistory,
   saveInvestigation,
   type Finding,
 } from './store';
@@ -43,7 +44,14 @@ function errorResponse(error: unknown) {
       error.retryAfterSeconds ? {'Retry-After': String(error.retryAfterSeconds)} : {}
     );
   const message = error instanceof Error ? error.message : 'Request failed.';
-  return json({error: {code: 'request_failed', message}}, 500);
+  // Errors may carry an HTTP status (Gemini busy = 503, quota = 429); keep it for the browser.
+  const status =
+    typeof (error as {status?: unknown})?.status === 'number'
+      ? (error as {status: number}).status
+      : 500;
+  const code =
+    status === 503 ? 'service_busy' : status === 429 ? 'quota_reached' : 'request_failed';
+  return json({error: {code, message}}, status);
 }
 
 function checkOrigin(request: Request) {
@@ -245,6 +253,8 @@ async function api(request: Request, env: Env): Promise<Response> {
         topic: discovery.topic,
         evidence: discovery.evidence,
       });
+    if (discovery.status === 'supported' && 'card' in discovery)
+      return json({...discovery, card: {...discovery.card, saveToken: await signResult(request, env, {...result, discoveryCard: discovery.card})}});
     return json(discovery);
   }
   if (url.pathname === '/api/recognize' && request.method === 'POST') {
@@ -263,7 +273,7 @@ async function api(request: Request, env: Env): Promise<Response> {
     const body = z
       .object({imageBase64: z.string().min(100).max(2_100_000), mimeType: z.literal('image/jpeg')})
       .parse(await readBody(request, 2_200_000));
-    return json(await recognizeFrame(env, body.imageBase64, body.mimeType));
+    return json(await recognizeFrame(env, body.imageBase64, body.mimeType, request.signal));
   }
   if (url.pathname === '/api/investigations' && request.method === 'GET')
     return json({investigations: await listInvestigations(env, sessionId)});
@@ -271,11 +281,12 @@ async function api(request: Request, env: Env): Promise<Response> {
     const body = z
       .object({
         resultToken: z.string().min(1).max(64_000),
+        discoveryToken: z.string().max(64_000).optional(),
         // Empty when the two articles share no topic; the saved result then keeps only the path.
         candidateId: z.string().regex(/^\d*$/).default(''),
         question: z.string().max(1200).default(''),
       })
-      .parse(await readBody(request, 70_000));
+      .parse(await readBody(request, 140_000));
     const result = await readResult(request, env, body.resultToken, sessionId);
     if (!result)
       return json(
@@ -302,85 +313,23 @@ async function api(request: Request, env: Env): Promise<Response> {
     } else {
       connection = {...result.connection, sharedTopics: [], evidenceByTopic: {}};
     }
-    const investigation = await saveInvestigation(env, sessionId, connection, body.question);
+    const signedCard = body.discoveryToken
+      ? await readResult(request, env, body.discoveryToken, sessionId) : null;
+    const card = signedCard?.discoveryCard;
+    if (body.discoveryToken && (!card || card.candidateId !== body.candidateId ||
+      signedCard?.connection.source.id !== connection.source.id ||
+      signedCard?.connection.target.id !== connection.target.id))
+      return json({error: {code: 'invalid_card', message: 'Refresh the explanation before saving.'}}, 400);
+    const finding: Finding | undefined = card ? {
+      status: 'Supported finding', finding: card.headline,
+      claims: [card.explanationSource, card.explanationTarget, card.whyInteresting].map(claim => ({claim, evidenceIds: card.evidenceIds})),
+      uncertainty: 'A shared link does not establish causation.', followUp: 'Ask a more specific question.',
+    } : undefined;
+    const investigation = await saveInvestigation(env, sessionId, connection, body.question, finding);
     return json({investigation}, 201);
   }
-  if (url.pathname === '/api/investigations/finding' && request.method === 'POST') {
-    const body = z
-      .object({
-        resultToken: z.string().min(1).max(64_000),
-        investigationId: z.string().uuid(),
-        finding: z
-          .object({
-            status: z.enum(['Supported finding', 'Hypothesis', 'Insufficient evidence']),
-            finding: z.string().max(1600),
-            claims: z
-              .array(
-                z
-                  .object({claim: z.string().max(500), evidenceIds: z.array(z.string()).max(8)})
-                  .strict()
-              )
-              .max(8),
-            uncertainty: z.string().max(700),
-            followUp: z.string().max(400),
-          })
-          .strict(),
-      })
-      .strict()
-      .parse(await readBody(request, 75_000));
-    const result = await readResult(request, env, body.resultToken, sessionId);
-    if (!result)
-      return json(
-        {error: {code: 'result_expired', message: 'This result expired. Scan the articles again.'}},
-        401
-      );
-    const record = await loadInvestigation(env, sessionId, body.investigationId);
-    if (!record)
-      return json({error: {code: 'not_found', message: 'Investigation not found.'}}, 404);
-    const allowedEvidence = new Set([
-      ...(record.evidence || []).map((item: any) => item.id),
-      ...Object.values(result.connection.evidenceByTopic)
-        .flat()
-        .map((item: any) => item.id),
-    ]);
-    if (
-      body.finding.claims.some((claim) => claim.evidenceIds.some((id) => !allowedEvidence.has(id)))
-    )
-      return json(
-        {
-          error: {
-            code: 'invalid_evidence',
-            message: 'A finding referenced evidence outside this investigation.',
-          },
-        },
-        400
-      );
-    const topicId = String(
-      result.connection.sharedTopics.find((topic) =>
-        (result.connection.evidenceByTopic[String(topic.id)] || []).some((item) =>
-          body.finding.claims.some((claim) => claim.evidenceIds.includes(item.id))
-        )
-      )?.id || ''
-    );
-    const sourceEvidence = topicId ? result.connection.evidenceByTopic[topicId] || [] : [];
-    const saved = await (
-      await import('./store')
-    ).appendFindingVersion(
-      env,
-      sessionId,
-      body.investigationId,
-      body.finding as Finding,
-      sourceEvidence,
-      {
-        toolActions: ['Discovery card saved'],
-        durationMs: 0,
-        requestCount: 0,
-        modelCalls: 0,
-        status: 'complete',
-      }
-    );
-    return json({investigation: saved}, 201);
-  }
+  if (url.pathname === '/api/investigations/finding' && request.method === 'POST')
+    return json({error: {code: 'server_findings_only', message: 'Findings are saved by the research server.'}}, 410);
   if (url.pathname === '/api/research' && request.method === 'POST') {
     const reservation = await reserveModelCall(env);
     if (!reservation.allowed)
@@ -399,10 +348,6 @@ async function api(request: Request, env: Env): Promise<Response> {
         resultToken: z.string().min(1).max(64_000),
         question: z.string().trim().min(2).max(1200),
         candidateId: z.string().min(1).max(30).optional(),
-        history: z
-          .array(z.object({role: z.enum(['user', 'assistant']), content: z.string().max(1600)}))
-          .max(6)
-          .optional(),
         investigationId: z.string().uuid().optional(),
       })
       .parse(await readBody(request, 70_000));
@@ -413,19 +358,29 @@ async function api(request: Request, env: Env): Promise<Response> {
         401
       );
     const selectedTopic = body.candidateId
-      ? result.connection.sharedTopics.find((topic) => String(topic.id) === body.candidateId)
+      ? [
+          ...result.connection.sharedTopics,
+          ...(result.connection.path?.steps ?? []).flat(),
+          ...(result.connection.path?.routes ?? []).flat(),
+        ].find((topic) => String(topic.id) === body.candidateId)
       : undefined;
     if (body.candidateId && !selectedTopic)
       return json(
-        {error: {code: 'invalid_topic', message: 'Choose a shared topic from this connection.'}},
+        {error: {code: 'invalid_topic', message: 'Choose a topic from this connection.'}},
         400
       );
-    if (body.investigationId && !(await loadInvestigation(env, sessionId, body.investigationId)))
+    const history = body.investigationId
+      ? await loadResearchHistory(env, sessionId, body.investigationId)
+      : [];
+    if (history === null)
       return json({error: {code: 'not_found', message: 'Investigation not found.'}}, 404);
+    const investigationId = body.investigationId || (env.MONGODB_URI
+      ? (await saveInvestigation(env, sessionId, result.connection, body.question)).id
+      : undefined);
     const controller = new AbortController();
     const timeout = setTimeout(
-      () => controller.abort(new Error('Research exceeded 45 seconds.')),
-      45_000
+      () => controller.abort(new Error('Research exceeded 70 seconds.')),
+      70_000
     );
     request.signal.addEventListener('abort', () => controller.abort(request.signal.reason), {
       once: true,
@@ -440,14 +395,14 @@ async function api(request: Request, env: Env): Promise<Response> {
           sessionId,
           {
             question: body.question,
-            history: body.history,
+            history,
             sourceId: result.connection.source.id,
             targetId: result.connection.target.id,
             sourceTitle: result.connection.source.title,
             targetTitle: result.connection.target.title,
             sharedTopic: selectedTopic?.title,
             sharedTopicId: selectedTopic?.id,
-            ...(body.investigationId ? {investigationId: body.investigationId} : {}),
+            ...(investigationId ? {investigationId} : {}),
           },
           emit,
           controller.signal

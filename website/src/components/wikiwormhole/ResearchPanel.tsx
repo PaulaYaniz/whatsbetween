@@ -15,6 +15,11 @@ type Props = {
   source: string;
   target: string;
   topic: string;
+  // Name of the stop or article selected on the map, shown under the title.
+  selectedTitle?: string;
+  // Reading view: the panel takes over the page so answers have room.
+  expanded?: boolean;
+  onExpandedChange?: (expanded: boolean) => void;
   candidateId?: string;
   suggestedQuestions?: string[];
   resultToken: string;
@@ -29,6 +34,9 @@ export function ResearchPanel({
   source,
   target,
   topic,
+  selectedTitle,
+  expanded = false,
+  onExpandedChange,
   candidateId,
   suggestedQuestions,
   resultToken,
@@ -49,11 +57,12 @@ export function ResearchPanel({
       input.current?.focus();
     }
   }, [draft]);
-  const suggestions = researchQuestions(source, target, topic, suggestedQuestions);
+  const suggestions = researchQuestions(source, target, topic, suggestedQuestions).slice(0, 2);
   async function ask(event: React.FormEvent) {
     event.preventDefault();
     const value = question.trim();
     if (busy || value.length < 2 || pending.current) return;
+    onExpandedChange?.(true);
     const controller = new AbortController();
     pending.current = controller;
     setBusy(true);
@@ -66,14 +75,6 @@ export function ResearchPanel({
     const update = (turn: Partial<Turn>) =>
       setTurns((items) => items.map((item, i) => (i === index ? {...item, ...turn} : item)));
     try {
-      const history = turns
-        .flatMap((turn) => [
-          {role: 'user' as const, content: turn.question.slice(0, 1600)},
-          ...(turn.result?.finding
-            ? [{role: 'assistant' as const, content: turn.result.finding.slice(0, 1600)}]
-            : []),
-        ])
-        .slice(-6);
       const send = (token: string) =>
         fetch('/api/research', {
           method: 'POST',
@@ -84,7 +85,6 @@ export function ResearchPanel({
             resultToken: token,
             candidateId,
             question: value,
-            history,
             ...(investigationId ? {investigationId} : {}),
           }),
         });
@@ -144,12 +144,33 @@ export function ResearchPanel({
       if (!controller.signal.aborted) setBusy(false);
     }
   }
+  useEffect(() => {
+    const element = input.current;
+    if (!element) return;
+    element.style.height = '0px';
+    element.style.height = `${Math.min(112, Math.max(42, element.scrollHeight))}px`;
+  }, [question, expanded]);
+
   return (
     <section className="ww-research">
       <header className="ww-research-heading">
-        <h2>Explore further</h2>
-        <p>Ask a question. Follow the evidence.</p>
-        <span>Context: {topic}</span>
+        <div className="ww-research-title">
+          <div className="ww-research-title-context">
+            <h2>Deep research</h2>
+            {selectedTitle && <span className="ww-research-focus">Focused on {selectedTitle}</span>}
+          </div>
+          {onExpandedChange && (
+            <button
+              type="button"
+              className={expanded ? 'ww-text-button ww-research-close' : 'ww-text-button'}
+              aria-label={expanded ? 'Close expanded research' : 'Expand research'}
+              aria-expanded={expanded}
+              onClick={() => onExpandedChange(!expanded)}
+            >
+              {expanded ? <span aria-hidden="true">×</span> : 'Expand'}
+            </button>
+          )}
+        </div>
       </header>
       <div className="ww-research-body">
         <div className="ww-question-suggestions" aria-label="Suggested questions">
@@ -175,60 +196,63 @@ export function ResearchPanel({
         >
           {turns.map((turn, index) => (
             <article className="ww-research-turn" key={index}>
-              <p className="ww-research-question">
-                <span>You asked · {turn.context}</span>
-                {turn.question}
-              </p>
+              {turn.result ? (
+                <details className="ww-research-question-details">
+                  <summary>Question</summary>
+                  <p className="ww-research-question">{turn.question}</p>
+                </details>
+              ) : (
+                <p className="ww-research-question">{turn.question}</p>
+              )}
               {turn.result && (
                 <div className="ww-finding">
-                  <span className="ww-answer-status">
-                    {{
-                      supported: 'Supported by sources',
-                      hypothesis: 'Possible explanation',
-                      insufficient: 'More evidence needed',
-                      partial: 'Research incomplete',
-                      unavailable: 'Research unavailable',
-                    }[turn.result.status] || turn.result.status}
-                  </span>
-                  {turn.result.finding && <p>{turn.result.finding}</p>}
-                  {turn.result.claims.map((claim, i) => (
-                    <p key={i}>
-                      {claim.claim}{' '}
-                      {claim.evidenceIds.map((id) => {
-                        const evidence = turn.result!.evidence.find((item) => item.id === id);
-                        return evidence ? (
-                          <a
-                            className="ww-inline-source"
-                            key={id}
-                            href={evidence.url}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            [{turn.result!.evidence.indexOf(evidence) + 1}]
-                          </a>
-                        ) : null;
-                      })}
-                    </p>
-                  ))}
-                  {cleanResearchText(turn.result.uncertainty) && (
+                  {turn.result.finding && <p className="ww-answer">{turn.result.finding}</p>}
+                  {!turn.result.finding && cleanResearchText(turn.result.uncertainty) && (
                     <p className="ww-research-detail">
                       {cleanResearchText(turn.result.uncertainty)}
                     </p>
                   )}
-                  {turn.result.followUp && (
-                    <p className="ww-research-detail">Explore next: {turn.result.followUp}</p>
+                  {(turn.result.claims.length > 0 || turn.result.evidence.length > 0) && (
+                    <details className="ww-answer-sources">
+                      <summary>Sources</summary>
+                      {turn.result.claims.map((claim, i) => (
+                        <p key={i}>
+                          {claim.claim}{' '}
+                          {claim.evidenceIds.map((id) => {
+                            const evidence = turn.result!.evidence.find((item) => item.id === id);
+                            return evidence ? (
+                              <a
+                                className="ww-inline-source"
+                                key={id}
+                                href={evidence.url}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                [{turn.result!.evidence.indexOf(evidence) + 1}]
+                              </a>
+                            ) : null;
+                          })}
+                        </p>
+                      ))}
+                      {turn.result.finding && cleanResearchText(turn.result.uncertainty) && (
+                        <p className="ww-research-detail">
+                          {cleanResearchText(turn.result.uncertainty)}
+                        </p>
+                      )}
+                    </details>
                   )}
-                  {turn.result.evidence.map((item, i) => (
-                    <a
-                      className="ww-source-row"
-                      key={item.id}
-                      href={item.url}
-                      target="_blank"
-                      rel="noreferrer"
+                  {turn.result.followUp && index === turns.length - 1 && !busy && (
+                    <button
+                      type="button"
+                      className="ww-follow-up"
+                      onClick={() => {
+                        setQuestion(turn.result!.followUp);
+                        input.current?.focus();
+                      }}
                     >
-                      [{i + 1}] {item.sourceArticle} · {item.section} ↗
-                    </a>
-                  ))}
+                      Ask next: {turn.result.followUp}
+                    </button>
+                  )}
                 </div>
               )}
               {turn.error && turn.error !== turn.result?.uncertainty && (
@@ -270,11 +294,18 @@ export function ResearchPanel({
           <textarea
             ref={input}
             id="ww-question"
+            rows={1}
             value={question}
             maxLength={1200}
             minLength={2}
             required
             disabled={busy}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                if (!busy) event.currentTarget.form?.requestSubmit();
+              }
+            }}
             placeholder="Ask about these objects or the shared topic…"
             onChange={(event) => setQuestion(event.target.value)}
           />
@@ -283,7 +314,7 @@ export function ResearchPanel({
             type="submit"
             disabled={busy || question.trim().length < 2}
           >
-            {busy ? 'Researching…' : turns.length ? 'Send follow-up' : 'Research this question'}
+            {busy ? 'Researching…' : turns.length ? 'Send' : 'Research'}
           </button>
         </form>
       </div>

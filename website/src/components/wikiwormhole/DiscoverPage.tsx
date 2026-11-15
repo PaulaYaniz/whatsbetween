@@ -11,9 +11,9 @@ import {
   type Finding,
   type PathInfo,
 } from './api';
-import {busiestRoute, ConnectionLoom, pathSteps, type LoomSelection} from './ConnectionLoom';
+import {ConnectionLoom, type LoomSelection} from './ConnectionLoom';
 import {ResearchPanel} from './ResearchPanel';
-import {Shell} from './Shell';
+import {Brand, Shell} from './Shell';
 
 import './wikiwormhole.css';
 import './discoveryWorkspace.css';
@@ -31,45 +31,18 @@ interface Selected extends LoomSelection {
   key: string;
 }
 
-const REASONS: Record<string, string> = {
-  graph_not_configured: 'The link graph is not connected, so routes cannot be searched right now.',
-  graph_unreachable: 'The link graph is offline, so routes cannot be searched right now.',
-  graph_unavailable: 'The link graph is still being prepared.',
-  no_path_within_limit: 'No route of six steps or fewer exists in the link graph.',
+
+// Why an explanation could not be written, in the reader's terms.
+const EXPLANATION_UNAVAILABLE: Record<string, string> = {
+  gemini_not_configured: 'Explanations are not set up on this server.',
+  gemini_busy: 'The AI service is busy right now. Try again in a moment.',
+  gemini_quota: 'The AI service has reached its limit for now. Try again later.',
+  insufficient_source_passages:
+    'The current article text does not say enough to explain this connection.',
+  invalid_model_response:
+    'The explanation did not match its sources, so it is not shown. Try again.',
+  default: 'The explanation could not be written this time. Try again.',
 };
-
-const number = (value: number) => value.toLocaleString();
-
-function summary(connection: Connection) {
-  const a = connection.source.title;
-  const b = connection.target.title;
-  const shared = connection.linkCounts?.shared ?? connection.sharedTopics.length;
-  const hops = connection.path?.found ? connection.path.hops : undefined;
-  if (connection.status === 'same_article')
-    return 'Both picks point to the same article. Scan two different objects.';
-  if (hops === 1 && shared)
-    return `${a} links straight to ${b}, and they share ${number(shared)} linked articles.`;
-  if (hops === 1) return `${a} links straight to ${b}.`;
-  if (shared)
-    return `${a} and ${b} don't link to each other, but they share ${number(shared)} linked articles.`;
-  if (hops)
-    return `${a} and ${b} share no linked articles. The shortest way across takes ${hops} steps.`;
-  return REASONS[connection.path?.reason ?? ''] ?? `No connection between ${a} and ${b} was found.`;
-}
-
-function defaultSelection(connection: Connection): Selected | null {
-  const topic = connection.sharedTopics[0];
-  if (topic) return {kind: 'shared', article: topic, key: `shared-${topic.id}`};
-  // Otherwise start on the busiest first stop.
-  const first = pathSteps(connection.path).steps[0]?.[0];
-  if (first)
-    return {kind: 'stop', article: first, step: 1, through: first.through, key: `stop-${first.id}`};
-  return null;
-}
-
-function routeQuestion(route: Article[]) {
-  return `Explain how ${route[0].title} connects to ${route[route.length - 1].title} through this Wikipedia link path: ${route.map((node) => node.title).join(' → ')}. For each step, explain what the link means using sources.`;
-}
 
 export function DiscoverPage() {
   const location = useLocation();
@@ -88,7 +61,27 @@ export function DiscoverPage() {
   const [question, setQuestion] = useState('How are these two things related?');
   const [researchDraft, setResearchDraft] = useState<{text: string} | null>(null);
   const [finding, setFinding] = useState<Finding | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const expandButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!expanded) return;
+    const close = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setExpanded(false);
+        expandButton.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', close);
+    return () => window.removeEventListener('keydown', close);
+  }, [expanded]);
   const [perStep, setPerStep] = useState(6);
+  // On narrow screens one section shows at a time: the map, the explanation, or the questions.
+  const [view, setView] = useState<'map' | 'explanation' | 'ask'>('map');
+  // Reading view for Deep research answers: the research panel takes over the page.
+  const [reading, setReading] = useState(false);
+  const narrow = () => window.matchMedia('(max-width: 900px)').matches;
+  // Phones draw path maps top to bottom with up to three stops per row.
+  const basePerStep = () => (window.matchMedia('(max-width: 640px)').matches ? 3 : 6);
   const [stopsBusy, setStopsBusy] = useState(false);
 
   // Load the result for this URL: use the state handed over by the previous page when it matches,
@@ -101,12 +94,29 @@ export function DiscoverPage() {
       incoming?.connection &&
       (!sourceId ||
         (incoming.connection.source.id === sourceId && incoming.connection.target.id === targetId));
-    const show = (value: State) => {
+    const show = (incoming: State) => {
+      // Camera crops only exist in the scan page's state; keep them for this tab so a refresh or
+      // a renewed result still shows the user's own photos.
+      const key = `wb-portraits:${incoming.connection.source.id}-${incoming.connection.target.id}`;
+      let value = incoming;
+      try {
+        if (incoming.portraits?.A || incoming.portraits?.B)
+          sessionStorage.setItem(key, JSON.stringify(incoming.portraits));
+        else {
+          const stored = sessionStorage.getItem(key);
+          if (stored) value = {...incoming, portraits: JSON.parse(stored)};
+        }
+      } catch {
+        // Storage can be full or blocked; the map still works without photos.
+      }
       setState(value);
+      setView('map');
+      setReading(false);
+      setExpanded(false);
       token.current = value.resultToken;
       renewed.current = false;
       setPerStep(6);
-      setSelected(defaultSelection(value.connection));
+      setSelected(null);
       setCard(null);
       setFinding(null);
       setNotice('');
@@ -135,8 +145,15 @@ export function DiscoverPage() {
     navigate('/', {replace: true});
   }, [location.key, params.sourceId, params.targetId]);
 
+  useEffect(() => {
+    if (!state || state.connection.sharedTopics.length) return;
+    const steps = state.connection.path?.steps ?? [];
+    if (basePerStep() === 3 && perStep === 6 && steps.some((column) => column.length > 3))
+      void loadStops(3);
+  }, [state?.connection.id]);
+
   // Explanation card for the selected shared topic.
-  const sharedId = selected?.kind === 'shared' ? String(selected.article.id) : '';
+  const sharedId = selected ? String(selected.article.id) : '';
   useEffect(() => {
     if (!state || !sharedId) return;
     let cancelled = false;
@@ -154,9 +171,7 @@ export function DiscoverPage() {
         if (response.card) setCard(response.card);
         else
           setExplanationError(
-            response.reason === 'gemini_not_configured'
-              ? 'Explanations are not set up on this server.'
-              : 'Both articles link here, but their current text does not say enough to explain why.'
+            EXPLANATION_UNAVAILABLE[response.reason ?? ''] ?? EXPLANATION_UNAVAILABLE.default
           );
       })
       .catch((error) => {
@@ -216,37 +231,6 @@ export function DiscoverPage() {
     }
   }
 
-  async function persistFinding(result: Finding) {
-    if (!state?.investigationId) return;
-    const status =
-      result.status === 'supported'
-        ? 'Supported finding'
-        : result.status === 'hypothesis'
-          ? 'Hypothesis'
-          : 'Insufficient evidence';
-    try {
-      await api('/investigations/finding', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          resultToken: token.current,
-          investigationId: state.investigationId,
-          finding: {
-            status,
-            finding: result.finding,
-            claims: result.claims,
-            uncertainty: result.uncertainty,
-            followUp: result.followUp,
-          },
-        }),
-      });
-    } catch (error) {
-      setNotice(
-        `The answer is here, but it could not be saved: ${error instanceof Error ? error.message : 'saving is unavailable.'}`
-      );
-    }
-  }
-
   async function save() {
     if (!state) return;
     setBusy(true);
@@ -256,32 +240,11 @@ export function DiscoverPage() {
         api<{investigation: {id: string}}>('/investigations', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({resultToken: token, candidateId: sharedId, question}),
+          body: JSON.stringify({resultToken: token, candidateId: sharedId, question, discoveryToken: card?.saveToken}),
         })
       );
       setState({...state, investigationId: response.investigation.id, saved: true});
-      if (card) {
-        await api('/investigations/finding', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({
-            resultToken: token.current,
-            investigationId: response.investigation.id,
-            finding: {
-              status: 'Supported finding',
-              finding: card.headline,
-              claims: [card.explanationSource, card.explanationTarget, card.whyInteresting].map(
-                (claim) => ({claim, evidenceIds: card.evidenceIds})
-              ),
-              uncertainty:
-                'This summarizes the passages shown; a shared link does not mean one causes the other.',
-              followUp: 'Ask a more specific question.',
-            },
-          }),
-        });
-      }
-      if (finding) await persistFinding(finding);
-      setNotice('Saved. Find it under Saved investigations.');
+      setNotice('Saved to your Research log.');
     } catch (error) {
       setNotice(
         `${error instanceof Error ? error.message : 'Saving is unavailable.'} The result is still here, so you can try again.`
@@ -315,6 +278,7 @@ export function DiscoverPage() {
   }
 
   function ask(text: string) {
+    if (narrow()) setView('ask');
     setQuestion(text);
     setResearchDraft({text});
   }
@@ -344,250 +308,241 @@ export function DiscoverPage() {
   const connection = state.connection;
   const a = connection.source.title;
   const b = connection.target.title;
-  const counts = connection.linkCounts;
   const shownShared = connection.sharedTopics.length;
-  const snapshot = connection.path?.snapshot ?? connection.graphSnapshot;
-  const snapshotLabel = snapshot
-    ? new Date(`${snapshot}T00:00:00Z`).toLocaleDateString('en-US', {
-        month: 'long',
-        year: 'numeric',
-        timeZone: 'UTC',
-      })
-    : '';
-  const route =
-    selected?.kind === 'stop' ? busiestRoute(connection, selected.article.id) : undefined;
-  const totalPaths = connection.path?.totalPaths ?? 0;
-  const shownPaths = connection.path?.shownPaths ?? 0;
   const pathMode =
     !shownShared && Boolean(connection.path?.found && (connection.path.hops ?? 0) >= 2);
 
   return (
-    <Shell active="scan">
-      <main className="ww-main ww-discover">
+    <Shell active="scan" header={false}>
+      <main className={`ww-main ww-discover${expanded ? ' is-map-expanded' : ''}`}>
         <div className="ww-discover-bar">
-          <Link to="/" className="ww-back">
-            Scan two new objects
-          </Link>
-          <button className="ww-text-button" onClick={save} disabled={busy || state.saved}>
-            {state.saved ? 'Saved' : 'Save this connection'}
-          </button>
+          <Brand />
+          <nav className="ww-discover-nav" aria-label="Main navigation">
+            <Link to="/saved">Research log</Link>
+            <Link to="/about">About</Link>
+          </nav>
         </div>
 
-        <header className="ww-discover-title">
-          <h1>
-            What's between {a} and {b}?
-          </h1>
-          <p>{summary(connection)}</p>
-        </header>
+        <div className="ww-discover-tabs" role="tablist" aria-label="Sections">
+          {(
+            [
+              ['map', 'Map'],
+              ['explanation', 'Explanation'],
+              ['ask', 'Ask'],
+            ] as const
+          ).map(([key, label]) => (
+            <button key={key} role="tab" aria-selected={view === key} onClick={() => setView(key)}>
+              {label}
+            </button>
+          ))}
+        </div>
 
-        <section className="ww-loom-stage" aria-label="Connection map">
-          <ConnectionLoom
-            key={connection.id}
-            connection={connection}
-            portraits={state.portraits}
-            selectedKey={selected?.key}
-            onSelect={(selection, key) => {
-              setSelected({...selection, key});
-              setNotice('');
-            }}
-          />
-          <ul className="ww-loom-legend">
-            <li>
-              <span className="ww-swatch ww-swatch--a" aria-hidden="true" />
-              Links from {a}
-            </li>
-            <li>
-              <span className="ww-swatch ww-swatch--b" aria-hidden="true" />
-              Links from {b}
-            </li>
-            <li>
-              <span
-                className={`ww-swatch ${shownShared ? 'ww-swatch--knot' : 'ww-swatch--stop'}`}
-                aria-hidden="true"
-              />
-              {shownShared ? 'Articles both of them link to' : 'Stops on the shortest routes'}
-            </li>
-          </ul>
-          {(pathMode || Boolean(counts?.shared)) && (
-            <div className="ww-loom-caption">
-              <p>
-                {pathMode
-                  ? `There are ${number(totalPaths)} shortest paths, each ${connection.path?.hops} steps long. The stops shown cover ${number(shownPaths)} of them.`
-                  : counts && counts.shared > shownShared
-                    ? `Showing ${shownShared} of the ${number(counts.shared)} articles they share: the most specific ones. Articles that almost everything links to, like ISBN, are left out.`
-                    : `Showing all ${shownShared} articles they share.`}
-              </p>
-              {pathMode && (
-                <div className="ww-loom-more">
-                  {shownPaths < totalPaths && perStep < 40 && (
-                    <button
-                      className="ww-text-button"
-                      disabled={stopsBusy}
-                      onClick={() => void loadStops(perStep * 2)}
-                    >
-                      Show more stops
-                    </button>
-                  )}
-                  {perStep > 6 && (
-                    <button
-                      className="ww-text-button"
-                      disabled={stopsBusy}
-                      onClick={() => void loadStops(6)}
-                    >
-                      Show fewer stops
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-          {counts && (
-            <p className="ww-loom-counts">
-              {a} links to {number(counts.source)} articles and {b} to {number(counts.target)}.{' '}
-              {snapshotLabel && `Links come from a ${snapshotLabel} snapshot of Wikipedia.`}
-            </p>
-          )}
-        </section>
-
-        <div className="ww-discover-columns">
-          <section
-            className={`ww-knot-detail ww-knot-detail--${selected?.kind ?? 'none'}`}
-            aria-live="polite"
-          >
-            {!selected && (
-              <p className="ww-knot-hint">
-                {connection.status === 'same_article'
-                  ? 'Go back and pick two different objects.'
-                  : 'There is nothing in between to explore for this pair. Try scanning another object.'}
-              </p>
-            )}
-
-            {selected?.kind === 'shared' && (
-              <>
-                <h2>{selected.article.title}</h2>
-                {selected.article.description && (
-                  <p className="ww-knot-description">{selected.article.description}</p>
-                )}
-                {explanationBusy && (
-                  <p className="ww-knot-status" role="status">
-                    Reading what the articles say…
-                  </p>
-                )}
-                {explanationError && (
-                  <div className="ww-knot-status" role="status">
-                    <p>{explanationError}</p>
-                    <button
-                      className="ww-text-button"
-                      onClick={() => setRetry((value) => value + 1)}
-                    >
-                      Try the explanation again
-                    </button>
-                  </div>
-                )}
-                {card && card.candidateId === sharedId && (
-                  <article className="ww-explanation">
-                    <h3>{card.headline}</h3>
-                    <dl>
-                      <dt>{a}</dt>
-                      <dd>{card.explanationSource}</dd>
-                      <dt>{b}</dt>
-                      <dd>{card.explanationTarget}</dd>
-                    </dl>
-                    <p className="ww-explanation-why">{card.whyInteresting}</p>
-                    <button
-                      className="ww-text-button"
-                      onClick={() => setEvidenceOpen((value) => !value)}
-                      aria-expanded={evidenceOpen}
-                    >
-                      {evidenceOpen
-                        ? 'Hide the passages'
-                        : `Show the ${card.evidence?.length ?? 0} passages this is based on`}
-                    </button>
-                    {evidenceOpen && (
-                      <ol className="ww-evidence">
-                        {card.evidence?.map((source) => (
-                          <li key={source.id}>
-                            <a href={source.url} target="_blank" rel="noreferrer">
-                              {source.sourceArticle}
-                            </a>
-                            <p>{source.excerpt}</p>
-                          </li>
-                        ))}
-                      </ol>
-                    )}
-                  </article>
-                )}
-                <div className="ww-knot-actions">
-                  <button
-                    className="ww-button ww-button--coral"
-                    onClick={() => ask(`How does ${selected.article.title} connect ${a} and ${b}?`)}
-                  >
-                    Ask about {selected.article.title}
-                  </button>
-                </div>
-              </>
-            )}
-
-            {selected?.kind === 'stop' && (
-              <>
-                <h2>{selected.article.title}</h2>
-                {selected.article.description && (
-                  <p className="ww-knot-description">{selected.article.description}</p>
-                )}
-                <p className="ww-knot-relation">
-                  Step {selected.step} of {connection.path?.hops}.
-                  {totalPaths && selected.through
-                    ? ` ${number(selected.through)} of the ${number(totalPaths)} shortest paths pass through it.`
-                    : ''}
+        <div className={`ww-discover-body${reading ? ' is-reading' : ''}`} data-view={view}>
+          <section className="ww-loom-stage" aria-label="Connection map">
+            {!connection.path?.found || connection.status === 'same_article' ? (
+              <div className="ww-map-unavailable" role="status">
+                <h2>
+                  {connection.status === 'same_article'
+                    ? 'Two objects, one Wikipedia article'
+                    : connection.path?.source !== 'graph'
+                      ? 'Connection map temporarily unavailable'
+                      : 'No route found within the search limit'}
+                </h2>
+                <p>
+                  {connection.status === 'same_article'
+                    ? `Both picks lead to ${a}. Deep research can help explore how they differ.`
+                    : connection.path?.source !== 'graph'
+                      ? 'The link-search service could not complete this request. Please reload to try again.'
+                      : `The link search did not find a route between ${a} and ${b} within its search limit. This does not mean they are unrelated.`}
                 </p>
-                {route && (
-                  <p className="ww-knot-route">{route.map((node) => node.title).join(' → ')}</p>
-                )}
-                <div className="ww-knot-actions">
-                  {route && (
-                    <button
-                      className="ww-button ww-button--coral"
-                      onClick={() => ask(routeQuestion(route))}
-                    >
-                      Explain this route
-                    </button>
-                  )}
-                  <a
-                    className="ww-button ww-button--light"
-                    href={selected.article.url}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Read {selected.article.title} on Wikipedia
-                  </a>
-                </div>
-              </>
+              </div>
+            ) : (
+              <ConnectionLoom
+                key={connection.id}
+                connection={connection}
+                expanded={expanded}
+                portraits={state.portraits}
+                selectedKey={selected?.key}
+                onSelect={(selection, key) => {
+                  setExpanded(false);
+                  setSelected({...selection, key});
+                  setNotice('');
+                  if (narrow()) setView('explanation');
+                }}
+              />
             )}
           </section>
 
-          <ResearchPanel
-            key={`${connection.source.id}-${connection.target.id}`}
-            source={a}
-            target={b}
-            topic={selected?.article.title || 'their connection'}
-            candidateId={selected?.kind === 'shared' ? sharedId : undefined}
-            suggestedQuestions={
-              card?.candidateId === sharedId ? card.suggestedQuestions : undefined
-            }
-            draft={researchDraft}
-            resultToken={state.resultToken}
-            renewToken={renewToken}
-            investigationId={state.investigationId}
-            onResult={(result, askedQuestion) => {
-              setQuestion(askedQuestion);
-              setFinding(result);
-              if (result.saved?.id)
-                setState((value) =>
-                  value ? {...value, investigationId: result.saved?.id} : value
-                );
-              else void persistFinding(result);
-            }}
-          />
+          <div className="ww-discover-side">
+            {connection.path?.found && connection.status !== 'same_article' && (
+              <div className="ww-loom-more ww-discover-map-actions">
+                <button
+                  ref={expandButton}
+                  className="ww-button ww-button--light"
+                  aria-expanded={expanded}
+                  onClick={() => {
+                    setExpanded(!expanded);
+                    if (!expanded && pathMode && perStep < 12) void loadStops(12);
+                  }}
+                >
+                  {expanded ? 'Collapse map' : 'Expand map'}
+                </button>
+                <button className="ww-button ww-button--dark" onClick={save} disabled={busy || state.saved}>
+                  {state.saved ? 'Saved' : busy ? 'Saving…' : 'Save'}
+                </button>
+                {stopsBusy && <span role="status">Loading connections…</span>}
+              </div>
+            )}
+            <section
+              className={`ww-knot-detail ww-panel-scroll ww-knot-detail--${selected?.kind ?? 'none'}`}
+              aria-live="polite"
+            >
+              {!selected && (
+                <p className="ww-knot-prompt">
+                  {connection.status === 'same_article'
+                    ? `Both objects resolve to ${a} on Wikipedia. You can explore their differences with Deep research, or choose another object.`
+                    : shownShared
+                      ? `Select one of the articles in the middle of the map to see how it connects ${a} and ${b}.`
+                      : pathMode
+                        ? `Select any stop on the map to see its route from ${a} to ${b} and have it explained.`
+                        : connection.path?.found
+                          ? 'These articles link directly. Ask Deep research to explore their relationship.'
+                          : 'No route was found in the available Wikipedia snapshot. You can still explore these objects with Deep research.'}
+                </p>
+              )}
+
+              {selected?.kind === 'shared' && (
+                <>
+                  <h2>{selected.article.title}</h2>
+                  {selected.article.description && (
+                    <p className="ww-knot-description">{selected.article.description}</p>
+                  )}
+                  {explanationBusy && (
+                    <p className="ww-knot-status" role="status">
+                      Reading what the articles say…
+                    </p>
+                  )}
+                  {explanationError && (
+                    <div className="ww-knot-status" role="status">
+                      <p>{explanationError}</p>
+                      <button
+                        className="ww-text-button"
+                        onClick={() => setRetry((value) => value + 1)}
+                      >
+                        Try the explanation again
+                      </button>
+                    </div>
+                  )}
+                  {card && card.candidateId === sharedId && (
+                    <article className="ww-explanation">
+                      <h3>{card.headline}</h3>
+                      <dl>
+                        <dt>{a}</dt>
+                        <dd>{card.explanationSource}</dd>
+                        <dt>{b}</dt>
+                        <dd>{card.explanationTarget}</dd>
+                      </dl>
+                      <p className="ww-explanation-why">{card.whyInteresting}</p>
+                      <button
+                        className="ww-text-button"
+                        onClick={() => setEvidenceOpen((value) => !value)}
+                        aria-expanded={evidenceOpen}
+                      >
+                        {evidenceOpen
+                          ? 'Hide the passages'
+                          : `Show the ${card.evidence?.length ?? 0} passages this is based on`}
+                      </button>
+                      {evidenceOpen && (
+                        <ol className="ww-evidence">
+                          {card.evidence?.map((source) => (
+                            <li key={source.id}>
+                              <a href={source.url} target="_blank" rel="noreferrer">
+                                {source.sourceArticle}
+                              </a>
+                              <p>{source.excerpt}</p>
+                            </li>
+                          ))}
+                        </ol>
+                      )}
+                    </article>
+                  )}
+                  <div className="ww-knot-actions">
+                    <button
+                      className="ww-button ww-button--coral"
+                      onClick={() =>
+                        ask(`How does ${selected.article.title} connect ${a} and ${b}?`)
+                      }
+                    >
+                      Ask about {selected.article.title}
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {selected?.kind === 'stop' && (
+                <>
+                  <h2>{selected.article.title}</h2>
+                  {selected.article.description && (
+                    <p className="ww-knot-description">{selected.article.description}</p>
+                  )}
+                  {explanationBusy && <p role="status">Writing a short explanation…</p>}
+                  {explanationError && (
+                    <div role="status">
+                      <p>{explanationError}</p>
+                      <button className="ww-text-button" onClick={() => setRetry((value) => value + 1)}>
+                        Try again
+                      </button>
+                    </div>
+                  )}
+                  {!explanationBusy && card?.candidateId === sharedId && (
+                    <p className="ww-knot-description">
+                      {card.explanationSource} {card.explanationTarget}
+                    </p>
+                  )}
+                  <div className="ww-knot-actions">
+                    <a
+                      className="ww-button ww-button--light"
+                      href={selected.article.url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Read more
+                    </a>
+                  </div>
+                </>
+              )}
+            </section>
+
+            <ResearchPanel
+              key={`${connection.source.id}-${connection.target.id}`}
+              source={a}
+              target={b}
+              topic={selected?.article.title || 'their connection'}
+              selectedTitle={selected?.article.title}
+              expanded={reading}
+              onExpandedChange={(value) => {
+                setReading(value);
+                if (value && narrow()) setView('ask');
+              }}
+              candidateId={selected ? String(selected.article.id) : undefined}
+              suggestedQuestions={
+                card?.candidateId === sharedId ? card.suggestedQuestions : undefined
+              }
+              draft={researchDraft}
+              resultToken={state.resultToken}
+              renewToken={renewToken}
+              investigationId={state.investigationId}
+              onResult={(result, askedQuestion) => {
+                setQuestion(askedQuestion);
+                setFinding(result);
+                if (result.saved?.id)
+                  setState((value) =>
+                    value ? {...value, investigationId: result.saved?.id, saved: true} : value
+                  );
+
+              }}
+            />
+          </div>
         </div>
 
         {notice && (

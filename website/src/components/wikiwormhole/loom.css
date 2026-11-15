@@ -351,3 +351,31 @@
     animation: none;
   }
 }
+
+/* Portraits are positioned by their centre (both layouts). */
+.ww-loom-frame .ww-loom-anchor {
+  left: auto;
+  right: auto;
+  transform: translate(-50%, -50%);
+}
+
+/* Vertical layout (phones, path maps): names sit beside the circles, not under them. */
+.ww-loom--vertical .ww-loom-object figcaption {
+  top: 50%;
+  left: 100%;
+  right: auto;
+  max-width: 140px;
+  margin: 0 0 0 12px;
+  text-align: left;
+  transform: translateY(-50%);
+}
+
+.ww-loom-toggle {
+  position: absolute;
+  right: 12px;
+  bottom: 4px;
+  color: var(--indigo);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
