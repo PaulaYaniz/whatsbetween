@@ -33,15 +33,41 @@ function jpegFrom(source: CanvasImageSource, width: number, height: number) {
   return canvas.toDataURL('image/jpeg', SCAN_QUALITY);
 }
 
+function detectionStyle(box: Track['box'], media: HTMLVideoElement | HTMLImageElement | null) {
+  let [top, left, bottom, right] = box.map((value) => value / 10);
+  if (media) {
+    const video = 'videoWidth' in media;
+    const mediaWidth = video ? media.videoWidth : media.naturalWidth;
+    const mediaHeight = video ? media.videoHeight : media.naturalHeight;
+    const rect = media.getBoundingClientRect();
+    if (mediaWidth && mediaHeight && rect.width && rect.height) {
+      const scale = video
+        ? Math.max(rect.width / mediaWidth, rect.height / mediaHeight)
+        : Math.min(rect.width / mediaWidth, rect.height / mediaHeight);
+      const renderedWidth = mediaWidth * scale;
+      const renderedHeight = mediaHeight * scale;
+      const offsetX = (rect.width - renderedWidth) / 2;
+      const offsetY = (rect.height - renderedHeight) / 2;
+      left = (left * renderedWidth) / rect.width + (offsetX / rect.width) * 100;
+      right = (right * renderedWidth) / rect.width + (offsetX / rect.width) * 100;
+      top = (top * renderedHeight) / rect.height + (offsetY / rect.height) * 100;
+      bottom = (bottom * renderedHeight) / rect.height + (offsetY / rect.height) * 100;
+    }
+  }
+  return {top: `${top}%`, left: `${left}%`, width: `${right - left}%`, height: `${bottom - top}%`};
+}
+
 // The detection boxes. They update many times a second, so they re-render on their own instead of
 // re-rendering the whole page.
 function TrackedBoxes({
   tracker,
   scanning,
+  media,
   onSelect,
 }: {
   tracker: ObjectTracker;
   scanning: boolean;
+  media: HTMLVideoElement | HTMLImageElement | null;
   onSelect: (track: Track) => void;
 }) {
   const [tracks, setTracks] = useState<Track[]>([]);
@@ -52,12 +78,7 @@ function TrackedBoxes({
         <button
           key={item.id}
           className="ww-detection"
-          style={{
-            top: `${item.box[0] / 10}%`,
-            left: `${item.box[1] / 10}%`,
-            width: `${(item.box[3] - item.box[1]) / 10}%`,
-            height: `${(item.box[2] - item.box[0]) / 10}%`,
-          }}
+          style={detectionStyle(item.box, media)}
           onClick={() => onSelect(item)}
           aria-label={`Select ${item.label}`}
         >
@@ -108,6 +129,7 @@ async function portraitFor(
 export function ScanPage() {
   const navigate = useNavigate();
   const video = useRef<HTMLVideoElement>(null);
+  const photo = useRef<HTMLImageElement>(null);
   const upload = useRef<HTMLInputElement>(null);
   const stream = useRef<MediaStream | null>(null);
   const request = useRef<AbortController | null>(null);
@@ -368,11 +390,17 @@ export function ScanPage() {
                         onLoadedData={() => scanNow.current()}
                       />
                     ) : (
-                      <img src={frame!} alt="Your selected photo" className="ww-scan-photo" />
+                      <img
+                        ref={photo}
+                        src={frame!}
+                        alt="Your selected photo"
+                        className="ww-scan-photo"
+                      />
                     )}
                     <TrackedBoxes
                       tracker={tracker}
                       scanning={scanning}
+                      media={camera ? video.current : frame ? photo.current : null}
                       onSelect={(track) => selectObject(track.label, camera ? track : undefined)}
                     />
                   </div>
