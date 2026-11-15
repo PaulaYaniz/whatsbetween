@@ -7,33 +7,44 @@ import './about.css';
 
 const tools = [
   {
-    name: 'Gemini',
+    name: 'Gemini API',
+    logo: '/logos/google-ai-studio.png',
     url: 'https://ai.google.dev/',
     use: 'names the objects in a photo and writes the explanations',
   },
   {
     name: 'Wikipedia API',
+    logo: '/logos/wikipedia.svg',
     url: 'https://www.mediawiki.org/wiki/API:Main_page',
     use: 'article search, current text and links',
   },
   {
     name: 'SDOW link graph',
+    logo: '/favicon-96x96.png',
     url: 'https://github.com/jwngr/sdow',
     use: 'a December 2023 copy of every Wikipedia link, used to find routes',
   },
   {
     name: 'LangChain Deep Agents',
+    logo: '/logos/langchain.svg',
     url: 'https://docs.langchain.com/oss/javascript/deepagents/overview',
     use: 'runs Dig deeper, with a fact-checker and a calculator helper',
   },
   {
     name: 'Wolfram Alpha',
+    logo: '/logos/wolfram.svg',
     url: 'https://www.wolframalpha.com/',
     use: 'only when a question needs a number',
   },
-  {name: 'MongoDB Atlas', url: 'https://www.mongodb.com/atlas', use: 'stores the research log'},
+  {
+    name: 'MongoDB Atlas',
+    logo: '/logos/mongodb.svg',
+    url: 'https://www.mongodb.com/atlas',
+    use: 'stores the research log',
+  },
   {
     name: 'Cloudflare Workers',
+    logo: '/logos/cloudflare.svg',
     url: 'https://developers.cloudflare.com/workers/',
     use: 'runs the API (the interface is React)',
   },
@@ -74,7 +85,16 @@ export function AboutPage() {
                 {tools.map((tool) => (
                   <div key={tool.name}>
                     <dt>
-                      <a href={tool.url}>{tool.name}</a>
+                      <a href={tool.url}>
+                        <img
+                          className="ww-about-logo"
+                          src={tool.logo}
+                          alt=""
+                          width="20"
+                          height="20"
+                        />
+                        <span>{tool.name}</span>
+                      </a>
                     </dt>
                     <dd>{tool.use}</dd>
                   </div>

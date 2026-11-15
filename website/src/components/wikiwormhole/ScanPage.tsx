@@ -19,7 +19,7 @@ const SCAN_QUALITY = 0.72;
 // When to ask Gemini again: soon when nothing is on screen, rarely while boxes are being followed
 // (the tracker keeps them current), and at most this often after a box is lost.
 const RESCAN_EMPTY_MS = 3000;
-const RESCAN_TRACKING_MS = 8000;
+const RESCAN_TRACKING_MS = 5000;
 const RESCAN_AFTER_LOSS_MS = 2000;
 // How often boxes are moved to follow the camera.
 const TRACK_INTERVAL_MS = 50;
@@ -113,6 +113,8 @@ export function ScanPage() {
   const request = useRef<AbortController | null>(null);
   // Which camera detection filled each slot, so its crop can become the object's portrait.
   const slotLabels = useRef<Record<Slot, string>>({A: '', B: ''});
+  // Camera-filled slots keep following fresh detections until the user edits or picks one.
+  const autoSelected = useRef<Record<Slot, boolean>>({A: false, B: false});
   // The crop of each chosen object, cut from the frame it was detected in at the moment it was
   // picked. Boxes disappear when objects leave view and the camera keeps re-scanning, so it cannot
   // wait until later. The latest frame and box seen for each detected label, kept after its box is
@@ -159,6 +161,7 @@ export function ScanPage() {
   }
   function selectObject(label: string, track?: Track) {
     const slot = activeSlot || (!choices.current.A.query ? 'A' : 'B');
+    autoSelected.current[slot] = false;
     choices.current[slot].setQuery(label);
     slotLabels.current[slot] = label;
     // Crop the portrait from what the camera shows right now, where the box currently is.
@@ -202,28 +205,36 @@ export function ScanPage() {
       }
       const labels = [...new Set(result.objects.map((item) => item.label))];
       setObjects(labels);
-      if (labels.length === 2 && !choices.current.A.query && !choices.current.B.query) {
-        choices.current.A.setQuery(labels[0]);
-        choices.current.B.setQuery(labels[1]);
-        slotLabels.current = {A: labels[0], B: labels[1]};
-        slotPortraits.current = {
-          A: portraitFor(sourceFrame, result.objects, labels[0]),
-          B: portraitFor(sourceFrame, result.objects, labels[1]),
-        };
+      if (labels.length >= 2) {
+        (['A', 'B'] as const).forEach((slot, index) => {
+          const label = labels[index];
+          const choice = choices.current[slot];
+          if (!autoSelected.current[slot] && choice.query) return;
+          if (slotLabels.current[slot] !== label) {
+            autoSelected.current[slot] = true;
+            slotLabels.current[slot] = label;
+            slotPortraits.current[slot] = portraitFor(sourceFrame, result.objects, label);
+            choice.setQuery(label);
+          }
+        });
       }
       setNotice(
         labels.length ? '' : 'No clear objects found. Try a different view or type two names.'
       );
     } catch (error) {
       if (version === generation.current && !controller.signal.aborted) {
+        const networkFailure =
+          error instanceof TypeError && error.message.toLowerCase().includes('fetch');
         setNotice(
           error instanceof Error && error.name === 'TimeoutError'
             ? 'Recognition took too long. Try again or type two object names.'
-            : error instanceof Error
-            ? error.message
-            : 'Recognition is unavailable. You can type object names.'
+            : networkFailure
+              ? 'The scan connection dropped. The camera is still on; retrying shortly.'
+              : error instanceof Error
+                ? error.message
+                : 'Recognition is unavailable. You can type object names.'
         );
-        nextScanAt.current = Date.now() + 15_000;
+        nextScanAt.current = Date.now() + (networkFailure ? RESCAN_TRACKING_MS : 15_000);
       }
     } finally {
       if (version === generation.current) {
@@ -285,19 +296,18 @@ export function ScanPage() {
     setStarting(true);
     setNotice('');
     try {
-      const media = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: false,
-      });
+      const media = await navigator.mediaDevices.getUserMedia({video: true, audio: false});
       stream.current = media;
       nextScanAt.current = 0;
       setFrame(null);
       tracker.clear();
       setCamera(true);
     } catch (error) {
-      setNotice(error instanceof Error && error.name === 'NotAllowedError'
-        ? 'Allow camera access for this site in Chrome, then try again.'
-        : 'This camera is unavailable. Choose another camera, reconnect it, or choose a photo.');
+      setNotice(
+        error instanceof Error && error.name === 'NotAllowedError'
+          ? 'Allow camera access for this site in Chrome, then try again.'
+          : 'This camera is unavailable. Choose another camera, reconnect it, or choose a photo.'
+      );
     } finally {
       setStarting(false);
     }
@@ -473,6 +483,7 @@ export function ScanPage() {
                       }}
                       onClick={() => setFocusedSlot(slot)}
                       onChange={(event) => {
+                        autoSelected.current[slot] = false;
                         slotLabels.current[slot] = '';
                         slotPortraits.current[slot] = undefined;
                         choice.setQuery(event.target.value);

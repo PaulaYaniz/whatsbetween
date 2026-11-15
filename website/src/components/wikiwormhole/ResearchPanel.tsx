@@ -286,14 +286,13 @@ export function ResearchPanel({
           ))}
         </div>
         <form onSubmit={ask}>
-          <label htmlFor="ww-question">
-            {turns.length
-              ? 'Ask a follow-up or a new question'
-              : 'What would you like to understand?'}
-          </label>
+          {turns.length > 0 && (
+            <label htmlFor="ww-question">Ask a follow-up or a new question</label>
+          )}
           <textarea
             ref={input}
             id="ww-question"
+            aria-label="Ask about these objects or the shared topic"
             rows={1}
             value={question}
             maxLength={1200}

@@ -1040,6 +1040,16 @@
 .ww-discover.is-map-expanded .ww-loom-stage .ww-loom {
   justify-content: flex-start;
 }
+.ww-map-collapse-control {
+  position: fixed;
+  z-index: 2;
+  left: 50%;
+  bottom: max(20px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+}
+.ww-map-collapse-control .ww-button {
+  box-shadow: 0 4px 18px rgb(30 39 64 / 20%);
+}
 
 /* Research keeps its reading space; the composer grows only when needed. */
 .ww-research-title-context {
@@ -1125,4 +1135,27 @@
 .ww-map-unavailable p {
   color: var(--muted);
   line-height: 1.6;
+}
+
+.ww-discover-top-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-left: auto;
+}
+.ww-discover-top-actions .ww-button {
+  min-height: 36px;
+  padding: 8px 14px;
+  font-size: 13px;
+}
+@media (max-width: 700px) {
+  .ww-discover-bar {
+    flex-wrap: wrap;
+  }
+  .ww-discover-top-actions {
+    order: 3;
+    flex-basis: 100%;
+    margin-left: 0;
+  }
 }

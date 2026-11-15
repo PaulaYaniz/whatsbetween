@@ -31,7 +31,6 @@ interface Selected extends LoomSelection {
   key: string;
 }
 
-
 // Why an explanation could not be written, in the reader's terms.
 const EXPLANATION_UNAVAILABLE: Record<string, string> = {
   gemini_not_configured: 'Explanations are not set up on this server.',
@@ -240,7 +239,12 @@ export function DiscoverPage() {
         api<{investigation: {id: string}}>('/investigations', {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({resultToken: token, candidateId: sharedId, question, discoveryToken: card?.saveToken}),
+          body: JSON.stringify({
+            resultToken: token,
+            candidateId: sharedId,
+            question,
+            discoveryToken: card?.saveToken,
+          }),
         })
       );
       setState({...state, investigationId: response.investigation.id, saved: true});
@@ -317,6 +321,29 @@ export function DiscoverPage() {
       <main className={`ww-main ww-discover${expanded ? ' is-map-expanded' : ''}`}>
         <div className="ww-discover-bar">
           <Brand />
+          {connection.path?.found && connection.status !== 'same_article' && (
+            <div className="ww-discover-top-actions">
+              <button
+                ref={expandButton}
+                className="ww-button ww-button--light"
+                aria-expanded={expanded}
+                onClick={() => {
+                  setExpanded(!expanded);
+                  if (!expanded && pathMode && perStep < 12) void loadStops(12);
+                }}
+              >
+                {expanded ? 'Collapse map' : 'Expand map'}
+              </button>
+              <button
+                className="ww-button ww-button--dark"
+                onClick={save}
+                disabled={busy || state.saved}
+              >
+                {state.saved ? 'Saved' : busy ? 'Saving…' : 'Save'}
+              </button>
+              {stopsBusy && <span role="status">Loading connections…</span>}
+            </div>
+          )}
           <nav className="ww-discover-nav" aria-label="Main navigation">
             <Link to="/saved">Research log</Link>
             <Link to="/about">About</Link>
@@ -374,25 +401,6 @@ export function DiscoverPage() {
           </section>
 
           <div className="ww-discover-side">
-            {connection.path?.found && connection.status !== 'same_article' && (
-              <div className="ww-loom-more ww-discover-map-actions">
-                <button
-                  ref={expandButton}
-                  className="ww-button ww-button--light"
-                  aria-expanded={expanded}
-                  onClick={() => {
-                    setExpanded(!expanded);
-                    if (!expanded && pathMode && perStep < 12) void loadStops(12);
-                  }}
-                >
-                  {expanded ? 'Collapse map' : 'Expand map'}
-                </button>
-                <button className="ww-button ww-button--dark" onClick={save} disabled={busy || state.saved}>
-                  {state.saved ? 'Saved' : busy ? 'Saving…' : 'Save'}
-                </button>
-                {stopsBusy && <span role="status">Loading connections…</span>}
-              </div>
-            )}
             <section
               className={`ww-knot-detail ww-panel-scroll ww-knot-detail--${selected?.kind ?? 'none'}`}
               aria-live="polite"
@@ -489,7 +497,10 @@ export function DiscoverPage() {
                   {explanationError && (
                     <div role="status">
                       <p>{explanationError}</p>
-                      <button className="ww-text-button" onClick={() => setRetry((value) => value + 1)}>
+                      <button
+                        className="ww-text-button"
+                        onClick={() => setRetry((value) => value + 1)}
+                      >
                         Try again
                       </button>
                     </div>
@@ -539,11 +550,22 @@ export function DiscoverPage() {
                   setState((value) =>
                     value ? {...value, investigationId: result.saved?.id, saved: true} : value
                   );
-
               }}
             />
           </div>
         </div>
+
+        {expanded && (
+          <div className="ww-map-collapse-control">
+            <button
+              className="ww-button ww-button--dark"
+              aria-label="Return to compact map view"
+              onClick={() => setExpanded(false)}
+            >
+              Compact map
+            </button>
+          </div>
+        )}
 
         {notice && (
           <p className="ww-notice" role="status">
