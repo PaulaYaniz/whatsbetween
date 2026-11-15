@@ -1,84 +1,70 @@
-# WikiWormhole Cloudflare, Gemini, and Atlas setup
+# What's Between: Gemini, Deep Agents and Atlas
 
-The WikiWormhole product UI and API run in a TypeScript Cloudflare Worker. Its
-Deep Agents research loop uses Gemini and request-scoped Wikipedia tools. The
-older Python/SQLite SDOW application remains a local graph experiment; it is not
-the deployed WikiWormhole backend.
+The TypeScript API runs with the compiled Vite/Cloudflare preview on this Mac.
+The full SDOW SQLite graph is served locally on port 8788 by
+`sdow.graph_service`. A named Cloudflare Tunnel serves the app at
+https://whatsbetween.us and https://www.whatsbetween.us.
 
-## Local Worker
+## Running the demo
 
-For a working local preview, run `npm run serve` from `website/` and open
-`http://127.0.0.1:3000`. This builds the app and runs the compiled Worker with
-Vite preview. The startup script imports existing Gemini settings from the
-Python prototype's ignored `sdow/.env.local` into ignored `website/.dev.vars`
-when those settings are missing. Existing Worker settings take precedence.
-It generates a private session secret once, and reports configuration status
-without printing credentials. Add `MONGODB_URI` to `website/.dev.vars` to
-enable Atlas saving, then restart `npm run serve`.
+From `sdow/`, run `scripts/demo.sh`. It starts the graph service, builds and
+serves the app on port 3000, keeps the Mac awake and opens the named tunnel.
+Keep the Mac online and plugged in. Stop existing previews before starting.
+For app-only work, run `npm run serve` in `website/`; restart preview after
+every build. Use Node 24.16 (`.nvmrc`). The development runner has a Mongo
+`punycode/` import issue; use compiled preview instead of `npm run dev`.
 
-The development runner currently fails on a transitive MongoDB
-CommonJS `punycode/` import; the compiled preview successfully serves the UI,
-signed browser sessions, and live Wikipedia article search.
+Secrets stay in ignored, mode-0600 `website/.dev.vars`. The local preview
+script fills missing values from the older ignored `sdow/.env.local`.
+Never print or commit credentials. Gemini uses project `worm`
+(`gen-lang-client-0890048036`) and model `gemini-3.1-flash-lite`.
+Gemini billing was disabled when verified November 15, 2026.
 
-From `website/`, install the npm dependencies and copy `.dev.vars.example` to
-`.dev.vars`. Fill in `GEMINI_API_KEY` and a random `SESSION_SECRET` to enable
-anonymous sessions, discovery cards, and deeper research. Set `MONGODB_URI` to
-an Atlas connection string to enable saving. The free Atlas tier is sufficient
-for development; the MLH offer and account credits depend on eligibility and are
-not prerequisites for testing the unsaved discovery flow.
+## Research and storage
 
-Run `npm run dev` for the Vite/Cloudflare local runtime. Run `npm run build` to
-check the static assets and Worker bundle. Wrangler serves the UI and Worker
-routes from one origin. The app creates a signed, HttpOnly anonymous session
-cookie; investigations are visible only to that session. Clearing browser
-cookies starts a new session and does not transfer saved items.
+Dig deeper uses Deep Agents, LangChain and request-scoped Wikipedia tools,
+with calculator and fact-checker subagents. Recognition and discovery cards
+still use Gemini REST directly. Wolfram is optional via `WOLFRAM_APP_ID`.
 
-## Optional integrations
+One research run is bounded by 10 model calls, 10 external research requests,
+a 45-second collection phase and a 70-second total deadline. The final model
+call and request/time headroom are reserved for synthesis. Model-backed HTTP
+requests also share a Mongo daily counter (default 200); this is a request cap,
+not an exact count of every provider call inside the agent.
 
-- Gemini is required for object recognition, generated discovery cards, and
-  adaptive research. Without a key, article search and shared-link discovery
-  remain available, and the UI reports that generated explanations are off.
-- MongoDB Atlas is required to save, reopen, version, and delete investigations.
-  Without Atlas, those endpoints return a configuration error; results remain
-  in the current page state and are not represented as saved.
-- Wolfram Alpha is optional. Set `WOLFRAM_APP_ID` to enable one calculation per
-  research run. When it is unset, the tool tells the agent no calculation was
-  performed. This repository does not include an AppID or confirm an active
-  account entitlement.
+Sessions use signed HttpOnly cookies. Investigations and history are scoped
+to the owning session; clearing cookies does not transfer ownership.
+Research on an unsaved connection creates an investigation when Atlas is
+configured. Research answers are saved server-side; discovery saves use signed
+card tokens. Concurrent writes allocate versions with an atomic increment.
+Browsers cannot submit arbitrary finding text through the old finding endpoint.
 
-## Limits and deployment gates
+Mongo stores investigation, finding and run timestamps as BSON Dates. Public
+summary timestamps remain ISO strings. Research runs have a BSON `expiresAt`
+and a single-field TTL index with `expireAfterSeconds: 0`; new runs expire after
+30 days. TTL cleanup is asynchronous. Saved investigations, findings and
+evidence do not expire. Follow-up context currently reads the latest three
+question/answer pairs from runs, so that context expires with those runs.
+Photos are used for recognition and are not saved to Atlas.
 
-Research is capped at four model calls, eight external research requests, one
-Wolfram request, and 45 seconds per run. Image payloads are sent for recognition
-only and are not written to Atlas. Wikipedia source excerpts, revision IDs,
-finding versions, and bounded run records are stored when Atlas is configured.
+For existing databases, from `website/` run:
+```sh
+node scripts/migrate-mongo-dates.mjs          # preview counts
+node scripts/migrate-mongo-dates.mjs --apply # convert dates and install TTL
+```
+The migration is idempotent, preserves unparseable strings and gives existing
+run logs at least 30 days from migration before expiration. It does not delete
+saved investigations. See [Mongo TTL behavior](https://www.mongodb.com/docs/manual/core/index-ttl/).
 
-Before a public deployment, add secrets with Wrangler, configure an Atlas
-network access rule that permits the Cloudflare Worker, and verify a real
-end-to-end run with the target accounts. Direct MongoDB connections from
-Workers can add connection setup latency; measure Atlas operations under the
-target deployment. Local checks on November 14, 2026 verified Gemini image
-recognition and an Atlas database ping, plus investigation save, list, reopen,
-evidence retrieval, and rejection of access from a different session through
-the compiled Worker preview. Public Cloudflare deployment and a live Wolfram
-calculation remain unverified.
+## Checks and deployment
 
-## MongoDB Atlas account and billing
+Use `npm run build`, `node --test scripts/test-*.mjs`, and
+`node scripts/check-save-atlas.mjs` for live temporary save/concurrency checks.
+The latter cleans up its QA investigation. Phone-over-cellular scanning,
+research before Save, saved-answer reload and follow-ups were confirmed
+November 15, 2026. The named domain was also verified over normal DNS/HTTPS.
 
-Create a free MongoDB account and select the free forever Atlas tier for an
-initial prototype. The MLH page advertises $50 in Atlas credits through the
-GitHub Student Developer Pack; eligibility and activation are handled by GitHub
-and MongoDB. Credits are different from an Atlas subscription. Commercial
-subscriptions may have monthly invoices, term commitments, prepaid credits, or
-marketplace billing. Organization owners or billing admins manage subscription
-activation and billing in Atlas. Do not add subscription activation codes or
-billing details to this repository. See [MongoDB subscription management](https://www.mongodb.com/docs/atlas/billing/subscription/)
-and the [MLH MongoDB offer](https://mlh.link/mongodb-benefits) for current terms.
-
-## Upstream workshop
-
-The dependency and runtime pattern is informed by the
-[LangChain Deep Agents HackPrinceton workshop](https://github.com/langchain-samples/hack-princeton-intro-to-deep-agents).
-This app uses the JavaScript Deep Agents package and its own bounded research
-tools; it does not run the workshop's Python environment or copy its agent
-configuration wholesale.
+The current setup runs from the Mac, not a deployed Worker. Moving to hosted
+Workers/graph infrastructure requires a separate deployment review, secret
+configuration, Atlas connectivity checks and explicit approval for paid plans.
+Never enable paid services or broaden Atlas network access as routine setup.
