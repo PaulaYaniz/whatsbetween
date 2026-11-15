@@ -8,6 +8,8 @@ const require = createRequire(import.meta.url);
 const moduleUrl = code => 'data:text/javascript;base64,' + Buffer.from(code).toString('base64');
 const compile = file => ts.transpileModule(readFileSync(new URL(file, import.meta.url), 'utf8'), {compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
 const replacements = {
+  './researchTeam': moduleUrl('export const runResearchTeam=async()=>({review:null}); export const parseTeamLead=x=>x; export const parseTeamReview=x=>x;'),
+  './researchTracing': moduleUrl('export const traceResearch=(_env,input,action)=>action(input, {});'),
   '@langchain/core/messages': moduleUrl('export class HumanMessage {constructor(content){this.content=content;}} export class SystemMessage extends HumanMessage {}'),
   '@langchain/core/tools': moduleUrl('export const tool=(fn,config)=>({...config,invoke:fn});'),
   '@langchain/google-genai': moduleUrl(`export class ChatGoogleGenerativeAI {async invoke(messages){const s=globalThis.__researchTest; s.syntheses++; s.editor=messages[0].content; const input=JSON.parse(messages[1].content); s.summaryInput=input; return {content:JSON.stringify({insightType:s.noConnection?'no_verified_connection':'specific_difference',status:'Supported finding',finding:'Grounded answer',claims:[{claim:'A sourced fact',evidenceIds:[input.evidence[0].id]}],uncertainty:s.placeholders?'None.':'',followUp:s.placeholders?'None.':'Ask another question'})};}}`),

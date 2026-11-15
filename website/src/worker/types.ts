@@ -2,6 +2,10 @@ export interface Env {
   ASSETS: {fetch(request: Request): Promise<Response>};
   GEMINI_API_KEY?: string;
   GEMINI_MODEL?: string;
+  LANGSMITH_TRACING?: string;
+  LANGSMITH_API_KEY?: string;
+  LANGSMITH_PROJECT?: string;
+  LANGSMITH_ENDPOINT?: string;
   MONGODB_URI?: string;
   MONGODB_DATABASE?: string;
   SESSION_SECRET?: string;

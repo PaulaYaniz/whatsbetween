@@ -47,9 +47,11 @@ Put the Worker on Cloudflare and the graph on a ~$12–24/mo droplet behind the 
 
 ## 2. Deepen what already exists (no new features)
 
+- [x] Competing research team: historical and design Deep Agents investigators, skeptical review, isolated citation verification, structured evidence handoffs, and at most one budget-gated reinvestigation. Live LangSmith run verified all stages; empty approval forces insufficient evidence.
+
 - [x] **Server-authoritative follow-up history:** research loads the latest three saved question/answer pairs from session-owned Mongo runs. Browser history is ignored; older and unsaved investigations start without prior-turn context.
 - [ ] **Recognition and discovery cards call Gemini over raw REST** (`gemini.ts`), outside LangChain. Moving them to `ChatGoogleGenerativeAI.withStructuredOutput(zod)` puts every model call on one stack with the same retries, timeouts and validation. Images go in as `image_url` data URLs; keep `maxRetries` low.
-- [ ] **Make the existing agent easier to see:** LangSmith tracing of Dig deeper (agent, calculator, fact-checker, to-do plan). Needs `LANGSMITH_*` secrets and `awaitAllCallbacks()`. Hide recognition inputs so photos aren't sent to LangSmith.
+- [x] **Research tracing:** LangSmith configured for Dig deeper only, including nested tool/model/subagent callbacks. Photo and credential redaction, bounded callback/client flushing. Live verified: a supported answer and 15 trace runs in project `whatsbetween` (Nov 15); temporary Atlas QA record removed. Recognition/discovery are outside the trace.
 - [x] **Mongo hygiene:** BSON Date timestamps, ISO API summaries, and 30-day run expiration. Existing Atlas dates migrated; saved investigations/findings/evidence do not expire. Migration and live save/concurrency checks passed.
 - [ ] If a LangChain MongoDB package is added: both pin `mongodb ^6`, while the app uses v7, so add `"overrides": {"mongodb": "$mongodb"}`. Atlas M0 allows 3 search/vector indexes in total.
 

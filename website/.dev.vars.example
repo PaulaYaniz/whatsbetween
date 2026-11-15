@@ -4,3 +4,9 @@ MONGODB_DATABASE=wikiwormhole
 SESSION_SECRET=replace-with-a-random-secret-of-at-least-32-characters
 # Optional. Without an AppID, Wolfram calculations are disabled and disclosed as unavailable.
 WOLFRAM_APP_ID=
+
+# Optional research-only tracing. Add the key privately, then explicitly enable.
+LANGSMITH_TRACING=false
+LANGSMITH_API_KEY=
+LANGSMITH_PROJECT=whatsbetween
+LANGSMITH_ENDPOINT=https://api.smith.langchain.com
