@@ -13,6 +13,10 @@ PAGES = {
     30: ('Island', 0), 40: ('ISBN', 0),
     # SDOW stores quotes escaped with a backslash.
     50: ("April Fools\\' Day", 0),
+    # Search ranking: 'Phone' redirects to Telephone; Phoneme is busier but only shares a prefix.
+    60: ('Phone', 1), 61: ('Telephone', 0), 62: ('Phoneme', 0), 63: ('Phone Link', 0),
+    # Capitalization: typing 'mug' should find Mug, not the abbreviation MUG.
+    70: ('MUG', 0), 71: ('Mug', 0),
     # Branching routes: 100 to 110 in three steps, four shortest paths.
     100: ('Start', 0), 101: ('Branch A', 0), 102: ('Branch B', 0), 103: ('Branch C', 0),
     104: ('Middle D', 0), 105: ('Middle E', 0), 110: ('Finish', 0),
@@ -36,8 +40,9 @@ EDGES = [
     (200, 201), (200, 202), (200, 203), (201, 204), (202, 205), (203, 205), (204, 210), (205, 210),
     (300, 301), (300, 302), (301, 303), (301, 304), (302, 305), (303, 310), (304, 310), (305, 310),
     (20, 301), (21, 301), (22, 301), (23, 301), (24, 301),
+    (20, 62), (21, 62), (22, 62), (23, 63),
 ]
-REDIRECTS = {6: 3}
+REDIRECTS = {6: 3, 60: 61}
 
 
 def build_database(path):
@@ -118,6 +123,61 @@ class GraphServiceTests(unittest.TestCase):
     self.assertEqual(body['hops'], 2)
     self.assertEqual([[page['id'] for page in route] for route in body['paths']], [[1, 9, 2]])
     self.assertEqual([page['title'] for page in body['paths'][0]], ['Coffee', 'Drink', 'Tea'])
+
+  def test_indirect_search_skips_direct_edge_but_keeps_real_routes(self):
+    with tempfile.TemporaryDirectory() as folder:
+      db = Path(folder) / 'graph.sqlite'
+      build_database(db)
+      with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE links SET outgoing_links = outgoing_links || '|2' WHERE id = 1")
+        conn.execute("UPDATE links SET incoming_links = incoming_links || '|1' WHERE id = 2")
+      client = create_app(db, allow_unvalidated=True).test_client()
+      direct = client.get('/api/graph/path?source=1&target=2').get_json()
+      indirect = client.get('/api/graph/path?source=1&target=2&preferIndirect=1').get_json()
+      self.assertEqual(direct['hops'], 1)
+      # The shortest indirect route (Coffee -> Drink -> Tea) has one stop, so routes with two stops
+      # are shown instead: Coffee -> Plant -> Leaf -> Tea, every link pointing forward.
+      self.assertEqual(indirect['hops'], 3)
+      self.assertTrue(indirect['directed'])
+      self.assertEqual([p['id'] for p in indirect['paths'][0]], [1, 7, 8, 2])
+      self.assertNotIn([1, 2], indirect['links'])
+      self.assertEqual(indirect['reversedLinks'], [])
+      # 20 links straight to 21. Both also link to ISBN (40), but citation pages are never stops,
+      # so the two-stop routes go through Chain 22 with some links followed backwards.
+      fallback = client.get('/api/graph/path?source=20&target=21&preferIndirect=1').get_json()
+      self.assertEqual(fallback['hops'], 3)
+      self.assertFalse(fallback['directed'])
+      self.assertNotIn([20, 21], fallback['links'])
+      stops = {page['id'] for column in fallback['steps'] for page in column}
+      self.assertNotIn(40, stops)
+      self.assertIn([22, 21], fallback['reversedLinks'])
+
+  def test_indirect_search_reaches_pages_nothing_links_to(self):
+    with tempfile.TemporaryDirectory() as folder:
+      db = Path(folder) / 'graph.sqlite'
+      build_database(db)
+      with sqlite3.connect(db) as conn:
+        # 'Earbuds' (90): a stub that links to Coffee (1) and Leaf (8) but has no incoming links.
+        conn.execute("INSERT INTO pages VALUES (90, 'Earbuds', 0)")
+        conn.execute("INSERT INTO links VALUES (90, 2, 0, '1|8', '')")
+        # Lonely (91) links only to Coffee, so the direct link is its only connection.
+        conn.execute("INSERT INTO pages VALUES (91, 'Lonely', 0)")
+        conn.execute("INSERT INTO links VALUES (91, 1, 0, '1', '')")
+        conn.execute("UPDATE links SET incoming_links = incoming_links || '|90|91' WHERE id = 1")
+        conn.execute("UPDATE links SET incoming_links = incoming_links || '|90' WHERE id = 8")
+      client = create_app(db, allow_unvalidated=True).test_client()
+      forward_only = client.get('/api/graph/path?source=1&target=90').get_json()
+      self.assertFalse(forward_only['found'])
+      body = client.get('/api/graph/path?source=1&target=90&preferIndirect=1').get_json()
+      self.assertTrue(body['found'])
+      self.assertFalse(body['directed'])
+      # Coffee -> Plant -> Leaf, then Earbuds links back to Leaf.
+      self.assertEqual(body['hops'], 3)
+      self.assertEqual([p['id'] for p in body['paths'][0]], [1, 7, 8, 90])
+      last_resort = client.get('/api/graph/path?source=1&target=91&preferIndirect=1').get_json()
+      self.assertTrue(last_resort['found'])
+      self.assertEqual(last_resort['hops'], 1)
+      self.assertFalse(last_resort['directed'])
 
   def test_path_respects_max_hops(self):
     within = self.testing_app.get('/api/graph/path?source=20&target=26&maxHops=6').get_json()
@@ -208,6 +268,15 @@ class GraphServiceTests(unittest.TestCase):
     self.assertEqual([item['title'] for item in results], ["April Fools' Day"])
     lookup = self.app.get("/api/graph/page?title=April%20Fools'%20Day").get_json()
     self.assertEqual(lookup['page']['id'], 50)
+
+  def test_search_resolves_redirects_and_prefers_whole_words(self):
+    titles = [item['title'] for item in self.app.get('/api/graph/search?q=phone').get_json()['results']]
+    self.assertEqual(titles, ['Telephone', 'Phone Link', 'Phoneme'])
+
+  def test_title_lookup_prefers_wikipedia_capitalization(self):
+    self.assertEqual(self.app.get('/api/graph/page?title=mug').get_json()['page']['id'], 71)
+    self.assertEqual(self.app.get('/api/graph/page?title=MUG').get_json()['page']['id'], 70)
+    self.assertEqual(self.app.get('/api/graph/search?q=mug').get_json()['results'][0]['title'], 'Mug')
 
   def test_database_is_opened_read_only(self):
     conn = sqlite3.connect(self.db.resolve().as_uri() + '?mode=ro', uri=True)

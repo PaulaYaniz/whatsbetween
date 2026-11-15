@@ -28,9 +28,35 @@ HUB_INCOMING_LIMIT = 5_000
 # Shared topics are ranked by how close their incoming-link count is to this level (log scale):
 # mid-level topics first, away from both hubs and obscure pages.
 PREFERRED_INCOMING = 500
+# Route stops (preferIndirect mode): pages linked from more than this many articles are broad
+# topics (countries, Album, YouTube); they are shown only when a step has nothing else.
+BROAD_TOPIC_INCOMING = 100_000
+# Pages linked mostly through citation, identifier, database and infobox templates, not because of
+# what they are about. Never used as route stops in preferIndirect mode.
+TEMPLATE_PAGES = (
+    'ISBN', 'Digital object identifier', 'Wayback Machine', 'Wikidata', 'ISSN', 'Semantic Scholar',
+    'OCLC', 'PubMed', 'PubMed Central', 'JSTOR', 'Bibcode', 'ArXiv', 'Handle System',
+    'Library of Congress Control Number', 'Virtual International Authority File',
+    'International Standard Name Identifier', 'Integrated Authority File', 'Open Library', 'IMDb',
+    'AllMusic', 'Sports Reference', 'Geographic coordinate system', 'Geographic Names Information System',
+    'Time zone', 'UTC+01:00', 'UTC+02:00', 'Central European Time', 'Central European Summer Time',
+    'Telephone numbering plan', 'Global Biodiversity Information Facility', 'Catalogue of Life',
+    'Interim Register of Marine and Nonmarine Genera', 'INaturalist', 'Encyclopedia of Life',
+    'Wikispecies', 'National Center for Biotechnology Information',
+    'Integrated Taxonomic Information System', 'Barcode of Life Data System', 'Open Tree of Life',
+    'World Register of Marine Species', 'IUCN Red List', 'International Plant Names Index',
+    'Plants of the World Online', 'World Flora Online', 'The Global Lepidoptera Names Index',
+)
+# Titles that make dull route stops: lists, filmographies, episode and season pages.
+LIST_TITLE = re.compile(
+    r'^(list of|lists of|outline of|index of|glossary of|timeline of)|filmography|discography|'
+    r'bibliography|episodes|\bseason\b|\(season', re.IGNORECASE)
 MAX_HOPS = 8
 DEFAULT_MAX_HOPS = 6
 MAX_PATHS = 5
+# Fewer routes than this when following links forward: also try links in either direction, at no
+# extra length, and keep whichever finds more routes.
+MIN_ROUTES = 3
 DEFAULT_PER_STEP = 6
 MAX_PER_STEP = 40
 MAX_TOPICS = 12
@@ -64,6 +90,16 @@ class Graph(object):
     self.database_path = Path(database_path)
     if not self.database_path.is_file():
       raise GraphUnavailable('Graph database not found.')
+    self._template_ids = None
+
+  def template_ids(self, conn):
+    """IDs of TEMPLATE_PAGES in this snapshot (looked up once)."""
+    if self._template_ids is None:
+      titles = [stored_title(title) for title in TEMPLATE_PAGES]
+      placeholders = ','.join('?' * len(titles))
+      self._template_ids = frozenset(row[0] for row in conn.execute(
+          f'SELECT id FROM pages WHERE is_redirect = 0 AND title IN ({placeholders})', titles))
+    return self._template_ids
 
   def connect(self):
     return sqlite3.connect(self.database_path.resolve().as_uri() + '?mode=ro', uri=True)
@@ -103,12 +139,16 @@ class Graph(object):
     raise GraphUnavailable('Redirect loop in graph data.')
 
   def resolve_title(self, conn, title):
-    row = conn.execute(
-        'SELECT id FROM pages WHERE title = ? COLLATE NOCASE ORDER BY is_redirect ASC LIMIT 1',
-        (stored_title(title),)).fetchone()
-    if row is None:
+    """The page for a typed title, following redirects. Prefers the exact spelling, then Wikipedia's
+    usual form (first letter capitalized), then any other capitalization ("can" finds Can, not CAN)."""
+    stored = stored_title(title)
+    rows = conn.execute('SELECT id, title, is_redirect FROM pages WHERE title = ? COLLATE NOCASE',
+                        (stored,)).fetchall()
+    if not rows:
       return None
-    return self.resolve_redirect(conn, row[0])
+    capitalized = stored[:1].upper() + stored[1:]
+    rows.sort(key=lambda row: (row[1] != stored, row[1] != capitalized, row[2]))
+    return self.resolve_redirect(conn, rows[0][0])
 
   def incoming_counts(self, conn, ids):
     ids = list(ids)
@@ -147,10 +187,21 @@ class Graph(object):
     topics.sort(key=lambda topic: (closeness(topic), topic['title']))
     return topics
 
-  def _search(self, conn, source_id, target_id, max_hops):
+  def neighbours(self, conn, ids, column, any_direction):
+    """Links of each page in one direction, or in both when any_direction is set."""
+    found = self.links(conn, ids, column)
+    if any_direction:
+      other = 'incoming_links' if column == 'outgoing_links' else 'outgoing_links'
+      for page_id, items in self.links(conn, ids, other).items():
+        found[page_id] = list(dict.fromkeys(found.get(page_id, []) + items))
+    return found
+
+  def _search(self, conn, source_id, target_id, max_hops, exclude_direct=False, any_direction=False,
+              skip=frozenset()):
     """Bidirectional level-by-level breadth-first search. Returns the forward parent map, the
     backward child map and the set of nodes where the two searches met, or None if no route exists
-    within max_hops."""
+    within max_hops. With any_direction, a link counts whichever way it points, so a page that
+    nothing links to can still be reached through the pages it links to."""
     forward_parents = {source_id: set()}
     backward_children = {target_id: set()}
     forward_frontier = {source_id}
@@ -161,20 +212,28 @@ class Graph(object):
 
     while forward_frontier and backward_frontier and not meeting and depth < max_hops:
       if len(forward_frontier) <= len(backward_frontier):
-        links = self.links(conn, forward_frontier, 'outgoing_links')
+        links = self.neighbours(conn, forward_frontier, 'outgoing_links', any_direction)
         next_frontier = {}
         for node in forward_frontier:
           for child in links.get(node, []):
+            if exclude_direct and node == source_id and child == target_id:
+              continue
+            if child in skip and child != target_id:
+              continue
             if child not in forward_parents:
               next_frontier.setdefault(child, set()).add(node)
         forward_parents.update(next_frontier)
         forward_frontier = set(next_frontier)
         meeting = forward_frontier & set(backward_children)
       else:
-        links = self.links(conn, backward_frontier, 'incoming_links')
+        links = self.neighbours(conn, backward_frontier, 'incoming_links', any_direction)
         next_frontier = {}
         for node in backward_frontier:
           for parent in links.get(node, []):
+            if exclude_direct and parent == source_id and node == target_id:
+              continue
+            if parent in skip and parent != source_id:
+              continue
             if parent not in backward_children:
               next_frontier.setdefault(parent, set()).add(node)
         backward_children.update(next_frontier)
@@ -189,13 +248,14 @@ class Graph(object):
       return None
     return forward_parents, backward_children, meeting
 
-  def shortest_path_graph(self, conn, source_id, target_id, max_hops):
+  def shortest_path_graph(self, conn, source_id, target_id, max_hops, exclude_direct=False,
+                          any_direction=False, skip=frozenset()):
     """Every node and link on any shortest path, with each node's step number and the number of
     shortest paths passing through it. Returns None when there is no route within max_hops."""
     if source_id == target_id:
       return {'hops': 0, 'step': {source_id: 0}, 'children': {}, 'parents': {}, 'through': {source_id: 1},
               'total': 1}
-    found = self._search(conn, source_id, target_id, max_hops)
+    found = self._search(conn, source_id, target_id, max_hops, exclude_direct, any_direction, skip)
     if found is None:
       return None
     forward_parents, backward_children, meeting = found
@@ -248,20 +308,117 @@ class Graph(object):
     return {'hops': hops, 'step': step, 'children': children, 'parents': parents, 'through': through,
             'total': to_node[target_id]}
 
-  def path_summary(self, conn, source_id, target_id, max_hops, per_step, hub_limit=HUB_INCOMING_LIMIT):
+  def three_step_graph(self, conn, source_id, target_id, any_direction=False, skip=frozenset()):
+    """Every route of exactly three links (source, first stop, second stop, target), in the same
+    shape as shortest_path_graph. Used when the shortest route has only one stop in the middle, so
+    the map can show two-stop routes instead. Returns None when there are none."""
+    ends = {source_id, target_id}
+    first = set(self.neighbours(conn, [source_id], 'outgoing_links', any_direction).get(source_id, []))
+    second = set(self.neighbours(conn, [target_id], 'incoming_links', any_direction).get(target_id, []))
+    first -= ends | skip
+    second -= ends | skip
+    if not first or not second:
+      return None
+    # Expand whichever side is smaller.
+    pairs = set()
+    if len(first) <= len(second):
+      for node, items in self.neighbours(conn, first, 'outgoing_links', any_direction).items():
+        pairs.update((node, item) for item in items if item in second and item != node)
+    else:
+      for node, items in self.neighbours(conn, second, 'incoming_links', any_direction).items():
+        pairs.update((item, node) for item in items if item in first and item != node)
+    # A page can be a first stop on some routes and a second stop on others; keep it where it has
+    # more routes so every page sits in one column.
+    as_first, as_second = {}, {}
+    for a, b in pairs:
+      as_first[a] = as_first.get(a, 0) + 1
+      as_second[b] = as_second.get(b, 0) + 1
+    pairs = {(a, b) for a, b in pairs
+             if as_first[a] >= as_second.get(a, 0) and as_second[b] > as_first.get(b, 0)}
+    if not pairs:
+      return None
+    children, parents, through = {}, {}, {}
+
+    def link(parent, child):
+      children.setdefault(parent, set()).add(child)
+      parents.setdefault(child, set()).add(parent)
+
+    step = {source_id: 0, target_id: 3}
+    for a, b in pairs:
+      link(source_id, a)
+      link(a, b)
+      link(b, target_id)
+      step[a], step[b] = 1, 2
+      through[a] = through.get(a, 0) + 1
+      through[b] = through.get(b, 0) + 1
+    through[source_id] = through[target_id] = len(pairs)
+    return {'hops': 3, 'step': step, 'children': children, 'parents': parents, 'through': through,
+            'total': len(pairs)}
+
+  def path_summary(self, conn, source_id, target_id, max_hops, per_step, hub_limit=HUB_INCOMING_LIMIT, prefer_indirect=False):
     """A readable slice of all shortest paths: the busiest stops at each step (most shortest paths
-    through them), only real links between them, and counts of total and shown paths."""
-    graph = self.shortest_path_graph(conn, source_id, target_id, max_hops)
+    through them), only real links between them, and counts of total and shown paths.
+
+    With prefer_indirect, the route should always pass through at least one other article. Tried in
+    order: links followed forward without the direct link; links in either direction without the
+    direct link (up to MAX_HOPS); then the direct link as a last resort. `directed` in the result
+    says whether every link on the route points from the source side to the target side.
+
+    prefer_indirect also aims for interesting routes: citation and identifier pages (TEMPLATE_PAGES)
+    are never stops; when the shortest route has a single stop, routes with two stops are shown
+    instead; and stops are ranked to favour specific topics over broad ones and lists."""
+    if prefer_indirect:
+      attempts = [(max_hops, True, False), (max(max_hops, MAX_HOPS), True, True),
+                  (max_hops, False, False), (max_hops, False, True)]
+    else:
+      attempts = [(max_hops, False, False)]
+    skip = self.template_ids(conn) if prefer_indirect else frozenset()
+    graph, directed = None, True
+    for hops_limit, exclude_direct, any_direction in attempts:
+      graph = self.shortest_path_graph(conn, source_id, target_id, hops_limit, exclude_direct,
+                                       any_direction, skip)
+      if graph is not None:
+        directed = not any_direction
+        break
     if graph is None:
       return None
+    # Stops on routes whose links all point forward; listed before the others.
+    forward = set(graph['step']) if directed else set()
+    if prefer_indirect and graph['hops'] == 2:
+      # One stop in the middle: show two-stop routes, forward links first, either direction when
+      # forward links give too few.
+      longer = self.three_step_graph(conn, source_id, target_id, False, skip)
+      longer_forward = set(longer['step']) if longer else set()
+      if longer is None or longer['total'] < MIN_ROUTES:
+        wide = self.three_step_graph(conn, source_id, target_id, True, skip)
+        if wide is not None and (longer is None or wide['total'] > longer['total']):
+          longer = wide
+      if longer is not None:
+        graph, forward = longer, longer_forward
+        directed = longer_forward == set(longer['step'])
+    elif prefer_indirect and directed and graph['hops'] > 1 and graph['total'] < MIN_ROUTES:
+      wider = self.shortest_path_graph(conn, source_id, target_id, graph['hops'], True, True, skip)
+      if wider is not None and wider['total'] > graph['total']:
+        graph, directed = wider, False
+    if prefer_indirect:
+      hub_limit = BROAD_TOPIC_INCOMING
     hops, step, children, parents, through = (
         graph['hops'], graph['step'], graph['children'], graph['parents'], graph['through'])
     middle = [node for node in step if 0 < step[node] < hops]
     incoming = self.incoming_counts(conn, middle)
     titles = self.pages(conn, list(step))
 
+    def interest(node):
+      """Higher for stops on many routes, with a moderate number of incoming links, and not lists."""
+      title = titles.get(node, {}).get('title', '')
+      specificity = abs(math.log10(max(incoming.get(node, 0), 1)) - math.log10(PREFERRED_INCOMING))
+      return math.log10(through[node] + 1) - 0.5 * specificity - (1 if LIST_TITLE.search(title) else 0)
+
     def rank(node):
-      return (-through[node], titles.get(node, {}).get('title', ''))
+      title = titles.get(node, {}).get('title', '')
+      if prefer_indirect:
+        return (node not in forward, -interest(node), title)
+      return (node not in forward, -through[node], title)
 
     def is_hub(node):
       return incoming.get(node, 0) > hub_limit
@@ -319,14 +476,18 @@ class Graph(object):
       shown_count[node] = sum(shown_count.get(parent, 0) for parent in parents.get(node, ()) if parent in shown)
 
     # A few full example routes (busiest first) for saving and "Explain this route".
+    # Prefer stops shown on the map, then non-hubs, then forward links, then the busiest.
+    def preference(item):
+      return (item in shown, not is_hub(item), item in forward, through[item], -item)
+
     def busiest_route_through(node):
       head, current = [node], node
       while current != source_id:
-        current = max(parents[current], key=lambda parent: (through[parent], -parent))
+        current = max(parents[current], key=preference)
         head.insert(0, current)
       current = node
       while current != target_id:
-        current = max(children[current], key=lambda child: (through[child], -child))
+        current = max(children[current], key=preference)
         head.append(current)
       return head
 
@@ -344,12 +505,22 @@ class Graph(object):
       details = titles.get(node, {'id': node, 'title': str(node), 'isRedirect': False})
       return {**details, 'through': through.get(node, 0)}
 
+    # Steps where the Wikipedia link points backwards (the later article links to the earlier one).
+    reversed_links = []
+    if not directed:
+      pairs = set(links) | {pair for route in routes for pair in zip(route, route[1:])}
+      outgoing = self.links(conn, {parent for parent, _ in pairs}, 'outgoing_links')
+      reversed_links = sorted([parent, child] for parent, child in pairs
+                              if child not in outgoing.get(parent, ()))
+
     return {
       'hops': hops,
+      'directed': directed,
       'totalPaths': graph['total'],
       'shownPaths': shown_count.get(target_id, 0),
       'steps': [[page(node) for node in column] for column in columns],
       'links': [list(item) for item in links],
+      'reversedLinks': reversed_links,
       'routes': [[page(node) for node in route] for route in routes],
     }
 
@@ -430,21 +601,35 @@ def create_app(database_path, status_path=None, allow_unvalidated=False, hub_lim
     query = stored_title(typed)
     if len(typed) < 2 or len(typed) > 100:
       raise ValueError('q must be 2 to 100 characters.')
-    # Prefix search on the indexed, case-insensitive title column.
+    # Prefix search on the indexed, case-insensitive title column, plus the exact title even when it
+    # is only a redirect (typing "phone" should find Telephone, which "Phone" redirects to).
     conn = graph.connect()
     try:
+      exact_id = graph.resolve_title(conn, typed)
       rows = conn.execute(
           'SELECT id, title FROM pages WHERE is_redirect = 0 '
           'AND title COLLATE NOCASE >= ? COLLATE NOCASE AND title COLLATE NOCASE < ? COLLATE NOCASE '
-          'LIMIT 300', (query, query + '\uffff')).fetchall()
-      ids = [page_id for page_id, _ in rows]
-      counts = graph.incoming_counts(conn, ids)
+          'LIMIT 2000', (query, query + '\uffff')).fetchall()
+      found = {page_id: display_title(title) for page_id, title in rows}
+      if exact_id is not None and exact_id not in found:
+        found[exact_id] = graph.pages(conn, [exact_id])[exact_id]['title']
+      counts = graph.incoming_counts(conn, list(found))
     finally:
       conn.close()
+    typed_lower = typed.lower()
+
+    def rank(item):
+      title = item['title'].lower()
+      # The page the typed title resolves to comes first, then other spellings of the same title.
+      # A whole-word match ("Phone Link") beats a longer word that merely starts the same ("Phoneme").
+      next_char = title[len(typed_lower):len(typed_lower) + 1]
+      whole_word = title.startswith(typed_lower) and (next_char == '' or not next_char.isalnum())
+      return (item['id'] != exact_id, title != typed_lower, not whole_word, -item['incomingLinks'])
+
     matches = sorted(
-        ({'id': page_id, 'title': display_title(title), 'incomingLinks': counts.get(page_id, 0)}
-         for page_id, title in rows),
-        key=lambda item: (item['title'].lower() != typed.lower(), -item['incomingLinks']))[:10]
+        ({'id': page_id, 'title': title, 'incomingLinks': counts.get(page_id, 0)}
+         for page_id, title in found.items()),
+        key=rank)[:10]
     return jsonify({'query': typed, 'snapshot': snapshot, 'results': matches})
 
   @app.get('/api/graph/pages')
@@ -489,16 +674,19 @@ def create_app(database_path, status_path=None, allow_unvalidated=False, hub_lim
     per_step = min(MAX_PER_STEP, max(1, int(request.args.get('perStep', DEFAULT_PER_STEP))))
     conn = graph.connect()
     try:
-      summary = graph.path_summary(conn, source_id, target_id, max_hops, per_step, hub_limit)
+      summary = graph.path_summary(conn, source_id, target_id, max_hops, per_step, hub_limit,
+                                   prefer_indirect=request.args.get('preferIndirect') == '1')
     finally:
       conn.close()
     base = {'sourceId': source_id, 'targetId': target_id, 'snapshot': snapshot, 'maxHops': max_hops}
     if summary is None:
       return jsonify({**base, 'found': False, 'paths': [], 'steps': [], 'links': [], 'totalPaths': 0,
                       'shownPaths': 0})
-    return jsonify({**base, 'found': True, 'hops': summary['hops'], 'totalPaths': summary['totalPaths'],
+    return jsonify({**base, 'found': True, 'hops': summary['hops'], 'directed': summary['directed'],
+                    'totalPaths': summary['totalPaths'],
                     'shownPaths': summary['shownPaths'], 'steps': summary['steps'],
-                    'links': summary['links'], 'paths': summary['routes']})
+                    'links': summary['links'], 'reversedLinks': summary['reversedLinks'],
+                    'paths': summary['routes']})
 
   return app
 
